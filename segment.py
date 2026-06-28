@@ -1,8 +1,9 @@
 import argparse
 import subprocess
 import sys
+from pipeline import read_annotated_data
 from util import handle_logs, verify_data
-from testing import read_annotated_data, test_
+from testing import test_
 
 parser = argparse.ArgumentParser()
 parser.add_argument("input_path", type=str, help="Path to the input dataset.")
@@ -24,6 +25,9 @@ def main():
     if result.returncode != 0:
         LOGGER.error("Unit Tests Failed. Exiting.")
         return
+    
+    read_annotated_data.make_master_file(DATASET_PATH)
+
 
 if __name__ == "__main__":
     main()
