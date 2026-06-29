@@ -1,7 +1,8 @@
 import argparse
+import questionary
 import subprocess
 import sys
-from pipeline import read_annotated_data
+from pipeline import preictal_segment
 from util import handle_logs, verify_data
 from testing import test_
 
@@ -13,23 +14,63 @@ args = parser.parse_args()
 DATASET_PATH = args.input_path
 LOG_PATH = args.log_path
 
-LOGGER = handle_logs.get_logger(args.log_path)
+LOGGER = handle_logs.get_logger("main", LOG_PATH)
 
-def main(): 
+def main():
+    LOGGER.info("-" * 60)
+    LOGGER.info("Starting pipeline")
+    LOGGER.info(f"Dataset path: {DATASET_PATH}")
+    LOGGER.info(f"Log path:     {LOG_PATH}")
+    LOGGER.info("-" * 60)
+
+    LOGGER.info("Running unit tests...")
     result = subprocess.run([
-        sys.executable, "-m", "pytest", "test_myfile.py",
-        "-v",        # test names
-        "--tb=short", # traceback on failure
+        sys.executable, "-m", "pytest", "testing/test_.py",
+        "-v",
+        "--tb=short",
         "--no-header",
     ])
     if result.returncode != 0:
-        LOGGER.error("Unit Tests Failed. Exiting.")
+        LOGGER.error("Unit tests failed. Aborted.")
         return
-    
-    read_annotated_data.make_master_file(DATASET_PATH)
+    LOGGER.info("Unit tests passed")
 
+    LOGGER.info("Scanning for unique tags in dataset...")
+    unique_tags = list(preictal_segment.get_unique_tags(DATASET_PATH))  # scan source
+    LOGGER.info(f"Available tags: {unique_tags}")
+
+    selected_tags = questionary.checkbox(
+        "Select all tags to make new preictal tags",
+        choices=unique_tags,
+    ).ask()
+    LOGGER.info(f"User selected tags: {selected_tags}")
+
+    preictal_duration = float(input("Select pre-ictal duration (int or float): "))
+    LOGGER.info(f"Preictal duration: {preictal_duration}s")
+
+    LOGGER.info("Prompting user for output file path")
+    new_master_path = input("Output path for master/preictal file? (Must be an existing .csv) ")
+    LOGGER.info(f"Output path: {new_master_path}")
+
+    LOGGER.info("Building master file...")
+    master_df = preictal_segment.make_master_file(
+        DATASET_PATH,
+        output_path=new_master_path,
+        allow_tag=selected_tags,
+    )
+    LOGGER.info("Master file built")
+
+    LOGGER.info("Adding preictal tags...")
+    master_df = preictal_segment.add_preictal_tags(
+        master_df,
+        preictal_duration,
+    )
+
+    master_df.to_csv(new_master_path, index=False)
+    LOGGER.info("Preictal tags added and file updated")
+    LOGGER.info("-" * 60)
+    LOGGER.info(f"Pipeline complete - output at {new_master_path}")
+    LOGGER.info("-" * 60)
 
 if __name__ == "__main__":
     main()
-  
-    
