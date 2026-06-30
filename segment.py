@@ -4,7 +4,7 @@ import subprocess
 import sys
 from pipeline import preictal_segment
 from util import handle_logs, verify_data
-from testing import test_
+from testing import test_preictal
 
 parser = argparse.ArgumentParser()
 parser.add_argument("input_path", type=str, help="Path to the input dataset.")
@@ -23,9 +23,10 @@ def main():
     LOGGER.info(f"Log path:     {LOG_PATH}")
     LOGGER.info("-" * 60)
 
+    verify_data.validate_input(DATASET_PATH)
     LOGGER.info("Running unit tests...")
     result = subprocess.run([
-        sys.executable, "-m", "pytest", "testing/test_.py",
+        sys.executable, "-m", "pytest", "testing/",
         "-v",
         "--tb=short",
         "--no-header",
