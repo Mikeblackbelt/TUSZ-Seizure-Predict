@@ -4,6 +4,22 @@ from util import handle_logs
 
 logger = handle_logs.get_logger("make_master_file", "logs/app.log")
 
+SPLITS = ("train", "dev", "eval")
+
+
+def get_split(path):
+    """
+    Determines whether a path belongs to train/dev/eval based on
+    TUSZ's directory structure (e.g. .../edf/train/01_tcp_ar/...).
+    """
+    parts_lower = [p.lower() for p in os.path.normpath(path).split(os.sep)]
+    for split in SPLITS:
+        if split in parts_lower:
+            return split
+    logger.warning(f"Could not determine split for path: {path}")
+    return "unknown"
+
+
 def get_unique_tags(dataset_path):
     logger.info(f"Scanning for unique tags in {dataset_path}")
     tags = set()
@@ -29,7 +45,7 @@ def get_unique_tags(dataset_path):
 def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
     """
     Walks the TUSZ dataset directory, reads all .csv annotation files,
-    and writes a single master CSV with seizure info + source file paths.
+    and writes a single master CSV with seizure info, split, and source paths.
     """
     logger.info(f"Building master file from {dataset_path}")
     records = []
@@ -69,6 +85,9 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
 
                 filtered["edf_path"] = edf_path
                 filtered["csv_path"] = csv_path
+                filtered["split"] = get_split(edf_path)
+                # -1 = not applicable; status only means something for preictal rows
+                filtered["status"] = -1
                 records.append(filtered)
                 logger.debug(f"Added {len(filtered)} rows from {csv_path}")
 
@@ -89,7 +108,7 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
 
     master = pd.concat(records, ignore_index=True)
 
-    cols = ["edf_path", "csv_path", "channel", "start_time", "stop_time", "label", "confidence"]
+    cols = ["edf_path", "csv_path", "split", "channel", "start_time", "stop_time", "label", "confidence", "status"]
     cols = [c for c in cols if c in master.columns]
     master = master[cols]
 
@@ -98,36 +117,68 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
     return master
 
 
-def add_preictal_tags(master_df, preictal_dur):
+def add_preictal_tags(master_df, start_cutoff, max_duration):
     """
-    For each row in master_df, adds a new row with tag f'p{label}'
-    spanning from max(0, start_time - preictal_dur) to start_time.
+    For each row in master_df, adds a new row tagged f'p{label}' representing
+    the preictal window:
+
+        raw_end   = ictal_start - start_cutoff
+        raw_start = ictal_start - start_cutoff - max_duration
+
+    Clamped to avoid negative timestamps. status indicates what got trimmed:
+        0 - nothing trimmed
+        1 - raw_start was trimmed to 0 (window shortened, but still valid)
+        2 - raw_end was trimmed to 0 (window collapses to [0, 0])
     """
-    logger.info(f"Adding preictal tags with duration {preictal_dur}s to {len(master_df)} rows")
+    logger.info(
+        f"Adding preictal tags (start_cutoff={start_cutoff}, max_duration={max_duration}) "
+        f"to {len(master_df)} rows"
+    )
     preictal_rows = []
-    clipped_count = 0
+    status_counts = {0: 0, 1: 0, 2: 0}
 
     for _, row in master_df.iterrows():
-        preictal_start = max(0, row["start_time"] - preictal_dur)
-        preictal_end = row["start_time"]
+        ictal_start = row["start_time"]
+        raw_end = ictal_start - start_cutoff
+        raw_start = raw_end - max_duration
 
-        if preictal_start == 0 and row["start_time"] < preictal_dur:
-            logger.debug(f"Preictal window clipped to 0 for {row['edf_path']} at t={row['start_time']}")
-            clipped_count += 1
+        if raw_end <= 0:
+            preictal_start = 0
+            preictal_end = 0
+            status = 2
+        elif raw_start <= 0:
+            preictal_start = 0
+            preictal_end = raw_end
+            status = 1
+        else:
+            preictal_start = raw_start
+            preictal_end = raw_end
+            status = 0
+
+        status_counts[status] += 1
+        if status != 0:
+            logger.debug(
+                f"Preictal window trimmed (status={status}) for {row['edf_path']} "
+                f"at ictal_start={ictal_start}"
+            )
 
         preictal_rows.append({
             **row.to_dict(),
             "label": f"p{row['label']}",
             "start_time": preictal_start,
             "stop_time": preictal_end,
+            "status": status,
         })
 
-    if clipped_count:
-        logger.warning(f"{clipped_count} preictal windows were clipped to t=0")
+    if status_counts[1] or status_counts[2]:
+        logger.warning(
+            f"{status_counts[1]} windows shortened (status=1), "
+            f"{status_counts[2]} windows collapsed to [0,0] (status=2)"
+        )
 
     preictal_df = pd.DataFrame(preictal_rows)
     result = pd.concat([master_df, preictal_df], ignore_index=True).sort_values(
-        ["edf_path", "start_time"]
+        ["split", "edf_path", "start_time"]
     ).reset_index(drop=True)
 
     logger.info(f"Preictal tags added - master now has {len(result)} rows")

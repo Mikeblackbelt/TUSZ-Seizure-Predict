@@ -45,8 +45,11 @@ def main():
     ).ask()
     LOGGER.info(f"User selected tags: {selected_tags}")
 
-    preictal_duration = float(input("Select pre-ictal duration (int or float): "))
-    LOGGER.info(f"Preictal duration: {preictal_duration}s")
+    start_cutoff = float(input("Start cutoff - gap between ictal start and preictal window end (int or float): "))
+    LOGGER.info(f"Start cutoff: {start_cutoff}s")
+
+    max_duration = float(input("Max preictal window duration (int or float): "))
+    LOGGER.info(f"Max duration: {max_duration}s")
 
     LOGGER.info("Prompting user for output file path")
     new_master_path = input("Output path for master/preictal file? (Must be an existing .csv) ")
@@ -63,7 +66,8 @@ def main():
     LOGGER.info("Adding preictal tags...")
     master_df = preictal_segment.add_preictal_tags(
         master_df,
-        preictal_duration,
+        start_cutoff,
+        max_duration,
     )
 
     master_df.to_csv(new_master_path, index=False)
