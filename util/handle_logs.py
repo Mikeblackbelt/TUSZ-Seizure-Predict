@@ -3,6 +3,17 @@ import sys
 from pathlib import Path
 
 def get_logger(name: str, log_file: str = None, level: int = logging.DEBUG) -> logging.Logger:
+    """
+    Create a configured logger with console output and optional file output.
+    
+    Parameters:
+    	name (str): Logger name.
+    	log_file (str, optional): Path to a log file. When provided, the file's parent directory is created if needed.
+    	level (int): Logging level applied to the logger and its handlers.
+    
+    Returns:
+    	logger (logging.Logger): The configured logger.
+    """
     logger = logging.getLogger(name)
     
     if logger.handlers:  # avoid duplicate handlers on re-import

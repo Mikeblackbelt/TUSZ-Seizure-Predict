@@ -9,8 +9,13 @@ SPLITS = ("train", "dev", "eval")
 
 def get_split(path):
     """
-    Determines whether a path belongs to train/dev/eval based on
-    TUSZ's directory structure (e.g. .../edf/train/01_tcp_ar/...).
+    Determine the dataset split for a path.
+    
+    Parameters:
+        path (str): File or directory path to inspect.
+    
+    Returns:
+        str: The first matching split name from `train`, `dev`, or `eval`, or `"unknown"` if none is found.
     """
     parts_lower = [p.lower() for p in os.path.normpath(path).split(os.sep)]
     for split in SPLITS:
@@ -21,6 +26,15 @@ def get_split(path):
 
 
 def get_unique_tags(dataset_path):
+    """
+    Scan CSV files under a dataset directory and collect unique label values.
+    
+    Parameters:
+    	dataset_path (str): Root directory to search recursively.
+    
+    Returns:
+    	set: Unique values found in the ``label`` column across readable CSV files.
+    """
     logger.info(f"Scanning for unique tags in {dataset_path}")
     tags = set()
     csv_count = 0
@@ -44,8 +58,15 @@ def get_unique_tags(dataset_path):
 
 def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
     """
-    Walks the TUSZ dataset directory, reads all .csv annotation files,
-    and writes a single master CSV with seizure info, split, and source paths.
+    Build a master CSV from annotation files in a TUSZ-style dataset.
+    
+    Parameters:
+    	dataset_path: Root directory containing annotation CSV files and matching EDF files.
+    	output_path: Destination path for the generated master CSV.
+    	allow_tag: Collection of labels to keep. If omitted, all labels found in the dataset are included.
+    
+    Returns:
+    	A DataFrame containing the combined master rows, or None if no valid records are found.
     """
     logger.info(f"Building master file from {dataset_path}")
     records = []
@@ -119,16 +140,24 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
 
 def add_preictal_tags(master_df, start_cutoff, max_duration):
     """
-    For each row in master_df, adds a new row tagged f'p{label}' representing
-    the preictal window:
-
-        raw_end   = ictal_start - start_cutoff
-        raw_start = ictal_start - start_cutoff - max_duration
-
-    Clamped to avoid negative timestamps. status indicates what got trimmed:
-        0 - nothing trimmed
-        1 - raw_start was trimmed to 0 (window shortened, but still valid)
-        2 - raw_end was trimmed to 0 (window collapses to [0, 0])
+    Add preictal window rows to a master annotations DataFrame.
+    
+    For each input row, creates a matching row labeled with a `p` prefix and
+    sets its time window to the interval ending `start_cutoff` seconds before
+    the original `start_time` and extending back up to `max_duration` seconds.
+    If the computed window would start before 0, it is clamped and marked with
+    a status value.
+    
+    Parameters:
+        master_df (pd.DataFrame): Master annotations table with at least
+            `split`, `edf_path`, `start_time`, `stop_time`, and `label` columns.
+        start_cutoff (numeric): Time gap to keep between the preictal window
+            end and the original `start_time`.
+        max_duration (numeric): Maximum length of each preictal window.
+    
+    Returns:
+        pd.DataFrame: The original rows plus the generated preictal rows, sorted
+        by split, EDF path, and start time.
     """
     logger.info(
         f"Adding preictal tags (start_cutoff={start_cutoff}, max_duration={max_duration}) "
