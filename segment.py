@@ -17,6 +17,11 @@ LOG_PATH = args.log_path
 LOGGER = handle_logs.get_logger("main", LOG_PATH)
 
 def main():
+    """
+    Run the preictal segmentation pipeline from the command line.
+    
+    Validates the input dataset, runs the test suite, prompts for tag and timing selections, builds the master file, applies preictal tags, and writes the updated CSV to the chosen output path.
+    """
     LOGGER.info("-" * 60)
     LOGGER.info("Starting pipeline")
     LOGGER.info(f"Dataset path: {DATASET_PATH}")
