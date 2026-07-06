@@ -212,3 +212,105 @@ def add_preictal_tags(master_df, start_cutoff, max_duration):
 
     logger.info(f"Preictal tags added - master now has {len(result)} rows")
     return result
+
+def add_postictal_and_consecutive(master_df, postictal_length, preictal_length):
+    """
+    Add postictal and consecutive tags, then resolve overlaps with preictal.
+    """
+    logger.info(
+        f"Adding postictal (length={postictal_length}) and consecutive tags "
+        f"(threshold={postictal_length + preictal_length})"
+    )
+
+    new_rows = []
+    group_cols = ["edf_path", "channel"]
+
+    for (edf_path, channel), group in master_df.groupby(group_cols):
+        ictal = group[~group["label"].astype(str).str.startswith("p", na=False)].copy()
+        if ictal.empty:
+            continue
+
+        ictal = ictal.sort_values("start_time").reset_index(drop=True)
+
+        i = 0
+        while i < len(ictal):
+            row = ictal.iloc[i]
+            stop = float(row["stop_time"])
+            label = str(row["label"])
+
+            # Consecutive check
+            if i + 1 < len(ictal):
+                next_row = ictal.iloc[i + 1]
+                gap = float(next_row["start_time"]) - stop
+
+                if gap < (postictal_length + preictal_length):
+                    next_label = str(next_row["label"])
+                    c_label = f"c{label}2" if label == next_label else f"c{label}{next_label}"
+
+                    c_start = stop
+                    c_end = float(next_row["start_time"]) - preictal_length
+
+                    new_rows.append({
+                        **row.to_dict(),
+                        "label": c_label,
+                        "start_time": c_start,
+                        "stop_time": max(c_start, c_end),
+                        "status": 2 if c_end <= c_start else 0,
+                    })
+                    i += 2
+                    continue
+
+            # Postictal
+            new_rows.append({
+                **row.to_dict(),
+                "label": f"q{label}",
+                "start_time": stop,
+                "stop_time": stop + postictal_length,
+                "status": 0,
+            })
+            i += 1
+
+    if new_rows:
+        full_df = pd.concat([master_df, pd.DataFrame(new_rows)], ignore_index=True)
+    else:
+        full_df = master_df.copy()
+
+    full_df = resolve_overlaps(full_df)
+
+    return full_df.sort_values(["split", "edf_path", "channel", "start_time"]).reset_index(drop=True)
+
+def resolve_overlaps(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Keep only the highest priority annotation when overlaps occur on the same (edf_path, channel).
+    Priority: consecutive (c*) > preictal (p*) > original ictal > postictal (q*)
+    """
+    if df.empty:
+        return df
+
+    def get_priority(label):
+        lbl = str(label)
+        if lbl.startswith('c'):
+            return 4
+        if lbl.startswith('p'):
+            return 3
+        if lbl.startswith('q'):
+            return 1
+        return 2 
+    
+    df = df.copy()
+    df['priority'] = df['label'].apply(get_priority)
+    
+    df = df.sort_values(
+        by=['edf_path', 'channel', 'start_time', 'priority'],
+        ascending=[True, True, True, False]
+    )
+    
+    df = df.drop_duplicates(
+        subset=['edf_path', 'channel', 'start_time', 'stop_time'], 
+        keep='first'
+    )
+    
+    df = df.drop(columns=['priority'])
+    
+    logger.info(f"Overlap resolution complete. Final row count: {len(df)}")
+    return df
