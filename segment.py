@@ -4,7 +4,7 @@ import subprocess
 import sys
 from pipeline import preictal_segment
 from util import handle_logs, verify_data
-from testing import test_preictal
+from testing.testing_segmentation import test_preictal
 
 parser = argparse.ArgumentParser()
 parser.add_argument("input_path", type=str, help="Path to the input dataset.")
