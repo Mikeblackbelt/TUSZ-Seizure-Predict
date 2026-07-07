@@ -10,6 +10,7 @@ Pygments==2.20.0
 pytest==9.1.1
 python-dateutil==2.9.0.post0
 questionary==2.0.1
+scipy==1.18.0
 six==1.17.0
 tzdata==2026.2
 wcwidth==0.8.1
