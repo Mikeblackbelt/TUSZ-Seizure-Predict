@@ -38,6 +38,7 @@ def get_unique_tags(dataset_path):
     logger.info(f"Scanning for unique tags in {dataset_path}")
     tags = set()
     csv_count = 0
+    failed_count = 0
 
     for root, dirs, files in os.walk(dataset_path):
         for csv_file in [f for f in files if f.endswith(".csv")]:
@@ -45,14 +46,22 @@ def get_unique_tags(dataset_path):
             try:
                 df = pd.read_csv(csv_path, comment="#")
                 df.columns = df.columns.str.strip()
+                if "label" not in df.columns:
+                    logger.warning(f"Skipping {csv_path} - no 'label' column found")
+                    failed_count += 1
+                    continue
                 new_tags = set(df["label"].unique())
                 tags.update(new_tags)
                 csv_count += 1
                 logger.debug(f"Parsed {csv_path} - found tags: {new_tags}")
+            except KeyError as e:
+                logger.warning(f"Skipping {csv_path} - missing column {e}")
+                failed_count += 1
             except Exception as e:
                 logger.error(f"Failed to parse {csv_path}: {e}")
+                failed_count += 1
 
-    logger.info(f"Scanned {csv_count} CSV files - unique tags found: {tags}")
+    logger.info(f"Scanned {csv_count} valid CSV files, skipped {failed_count} - unique tags found: {tags}")
     return tags
 
 
@@ -97,6 +106,14 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
                 df = pd.read_csv(csv_path, comment="#")
                 df.columns = df.columns.str.strip()
 
+                # Validate required columns
+                required_cols = ["label", "start_time", "stop_time", "channel"]
+                missing = [c for c in required_cols if c not in df.columns]
+                if missing:
+                    logger.error(f"Skipping {csv_path} - missing columns: {missing}")
+                    skipped_parse_error += 1
+                    continue
+
                 filtered = df[df["label"].isin(allow_tag)].copy()
 
                 if filtered.empty:
@@ -124,7 +141,7 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
     )
 
     if not records:
-        logger.warning("No records found - master file not written")
+        logger.error("No records found - master file not written")
         return None
 
     master = pd.concat(records, ignore_index=True)
@@ -158,7 +175,18 @@ def add_preictal_tags(master_df, start_cutoff, max_duration):
     Returns:
         pd.DataFrame: The original rows plus the generated preictal rows, sorted
         by split, EDF path, and start time.
+    
+    Raises:
+        ValueError: If master_df is None or empty.
     """
+    if master_df is None:
+        logger.error("master_df is None - cannot add preictal tags. Check that make_master_file() found valid records.")
+        raise ValueError("master_df cannot be None. No valid records found in dataset.")
+    
+    if master_df.empty:
+        logger.error("master_df is empty - cannot add preictal tags")
+        raise ValueError("master_df is empty. No valid records found in dataset.")
+    
     logger.info(
         f"Adding preictal tags (start_cutoff={start_cutoff}, max_duration={max_duration}) "
         f"to {len(master_df)} rows"
@@ -217,6 +245,10 @@ def add_postictal_and_consecutive(master_df, postictal_length, preictal_length):
     """
     Add postictal and consecutive tags, then resolve overlaps with preictal.
     """
+    if master_df is None or master_df.empty:
+        logger.error("master_df is None or empty - cannot add postictal/consecutive tags")
+        raise ValueError("master_df cannot be None or empty")
+    
     logger.info(
         f"Adding postictal (length={postictal_length}) and consecutive tags "
         f"(threshold={postictal_length + preictal_length})"

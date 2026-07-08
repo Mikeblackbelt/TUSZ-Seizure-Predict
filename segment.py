@@ -34,7 +34,7 @@ def main():
     parser.add_argument(
         "--save-config",
         action="store_true",
-        help="Save the provided arguments as defaults to app_path.json"
+        help="Save the provided arguments as defaults to app_path.json. This will also allow for all logs to be saved to the specified log file, rather than just the main logs."
     )
    
     args = parser.parse_args()
