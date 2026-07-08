@@ -8,7 +8,7 @@ from pipeline.preictal_segment import (
 )
 from util import handle_logs
 
-logger = handle_logs.get_logger("test_pipeline", "logs/test.log")
+logger = handle_logs.get_logger("test_pipeline", "app")
 
 def write_csv(path, labels, start_times=None, stop_times=None):
     """
