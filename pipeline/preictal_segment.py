@@ -2,7 +2,7 @@ import os
 import pandas as pd
 from util import handle_logs
 
-logger = handle_logs.get_logger("make_master_file", "logs/app.log")
+logger = handle_logs.get_logger("make_master_file", "applog")
 
 SPLITS = ("train", "dev", "eval")
 
