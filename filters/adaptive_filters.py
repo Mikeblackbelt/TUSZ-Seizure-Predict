@@ -4,6 +4,9 @@ import numpy as np
 import mne
 from scipy import signal
 from scipy.stats import variation
+from scipy.signal import resample_poly
+from fractions import Fraction
+
 
 #uses the methods of Mahdi, M., & Baghdadi, A (2026)
 
