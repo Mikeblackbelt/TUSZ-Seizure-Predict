@@ -12,6 +12,13 @@ import os
 
 class EarlyStopping:
     def __init__(self, patience=10, min_delta=0):
+        """
+        Initialize early-stopping state.
+        
+        Parameters:
+            patience (int): Number of consecutive non-improving evaluations allowed.
+            min_delta (float): Minimum validation-loss decrease required to count as an improvement.
+        """
         self.patience = patience
         self.min_delta = min_delta
         self.best_loss = None
@@ -19,6 +26,15 @@ class EarlyStopping:
         self.early_stop = False
 
     def __call__(self, val_loss):
+        """
+        Update early-stopping state with a validation loss value.
+        
+        Parameters:
+            val_loss: The current validation loss.
+        
+        Returns:
+            `true` if the patience threshold has been reached, `false` otherwise.
+        """
         if self.best_loss is None:
             self.best_loss = val_loss
         elif val_loss < self.best_loss - self.min_delta:
@@ -32,10 +48,27 @@ class EarlyStopping:
         return self.early_stop
 
 def setup_logging(log_file, log_level):
+    """
+    Configure logging to write messages to a file.
+    
+    Parameters:
+        log_file: Path to the log file.
+        log_level: Minimum logging level to record.
+    """
     logging.basicConfig(filename=log_file, level=log_level, 
                         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 def calculate_metrics(y_true, y_pred):
+    """
+    Compute weighted classification performance metrics.
+    
+    Parameters:
+        y_true: Ground-truth class labels.
+        y_pred: Predicted class labels.
+    
+    Returns:
+        tuple: Accuracy, weighted F1 score, weighted precision, and weighted recall.
+    """
     acc = accuracy_score(y_true, y_pred)
     f1 = f1_score(y_true, y_pred, average='weighted')
     precision = precision_score(y_true, y_pred, average='weighted')
@@ -43,6 +76,17 @@ def calculate_metrics(y_true, y_pred):
     return acc, f1, precision, recall
 
 def combine_waveforms(clean, noise, snr_db):
+    """
+    Combine clean and noise waveforms at a target signal-to-noise ratio.
+    
+    Parameters:
+        clean: Array-like data containing clean waveform samples at index 0.
+        noise: Array-like data containing noise waveform samples at index 0 and a label at index 1.
+        snr_db: Target signal-to-noise ratio in decibels. If None, an SNR is sampled independently for each noise sample.
+    
+    Returns:
+        tuple: The combined waveforms and an array of labels repeated for each noise sample.
+    """
     rms = lambda x: np.sqrt(np.mean(x ** 2, axis=1))
     clean_EEG = clean[0]
     noise_EEG = noise[0]

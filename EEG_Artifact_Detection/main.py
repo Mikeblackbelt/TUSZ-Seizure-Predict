@@ -6,6 +6,12 @@ warnings.filterwarnings("ignore")
 
 
 def load_config():
+    """
+    Parse command-line arguments for dataset, training, logging, and execution settings.
+    
+    Returns:
+        argparse.Namespace: Parsed configuration values.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument('--datapath', type=str, default='./data')
     parser.add_argument('--outputpath', type=str, default='./output')

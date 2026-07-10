@@ -14,6 +14,11 @@ np.random.seed(1305)
 
 class DataNoiseCombiner:
     def __init__(self, config):
+        """Initialize the combiner with the configured datasets and generate the output splits.
+        
+        Parameters:
+            config: Configuration containing the data path and dataset processing settings.
+        """
         self.config = config
         self.data_clean = self.load_samples(os.path.join(config.datapath, "filtered80Hz_EEG_all_epochs.mat"), 0)
         self.data_eog = self.load_samples(os.path.join(config.datapath, "filtered80Hz_EOG_all_epochs.mat"), 1)
@@ -24,6 +29,20 @@ class DataNoiseCombiner:
         self.process_and_save_data()
 
     def load_samples(self, path, label=None):
+        """
+        Load waveform samples from a supported file and optionally assign labels.
+        
+        Parameters:
+            path (str or pathlib.Path): Path to a `.mat`, `.csv`, or `.npy` file.
+            label (int, optional): Label assigned to every loaded sample.
+        
+        Returns:
+            tuple: The waveform array and an array containing the assigned label for
+            each sample, or `None` when no label is provided.
+        
+        Raises:
+            ValueError: If the file has an unsupported extension.
+        """
         path = Path(path)
         data = sio.loadmat(path) if path.suffix == ".mat" else (
             genfromtxt(path, delimiter=",") if path.suffix == ".csv" else (
@@ -36,26 +55,70 @@ class DataNoiseCombiner:
 
     @staticmethod
     def shuffle_indices(length):
+        """Return a randomly shuffled array of indices from zero to length minus one.
+        
+        Parameters:
+        	length (int): Number of indices to generate.
+        
+        Returns:
+        	np.ndarray: Shuffled integer indices.
+        """
         indices = np.arange(length)
         np.random.shuffle(indices)
         return indices
 
     def split_indices(self, indices, test_size, val_size):
+        """
+        Split shuffled indices into test, validation, and training subsets.
+        
+        Parameters:
+        	indices (array-like): Indices to partition.
+        	test_size (float): Fraction of indices assigned to the test subset.
+        	val_size (float): Fraction of indices assigned to the validation subset.
+        
+        Returns:
+        	tuple: Test, validation, and training index subsets, in that order.
+        """
         test_size, val_size = int(test_size * len(indices)), int(val_size * len(indices))
         return indices[:test_size], indices[test_size:test_size + val_size], indices[test_size + val_size:]
 
     def save_data(self, X, y, data_type, snr_type=None):
+        """
+        Save feature and label arrays to the configured data directory.
+        
+        Parameters:
+        	X (numpy.ndarray): Feature array to z-score along axis 1 before saving.
+        	y (numpy.ndarray): Label array to save unchanged.
+        	data_type (str): Subdirectory identifying the dataset split.
+        	snr_type (str, optional): Subdirectory identifying the SNR condition.
+        """
         directory = Path(self.config.datapath) / data_type / (snr_type or "")
         directory.mkdir(parents=True, exist_ok=True)
         np.save(directory / "X.npy", zscore(X, axis=1))
         np.save(directory / "Y.npy", y)
 
     def combine_and_save(self, clean_indices, noise_indices, data_clean, data_noise, snr):
+        """
+        Combine selected clean and noise waveforms at the specified signal-to-noise ratio.
+        
+        Parameters:
+            clean_indices: Indices selecting clean waveforms.
+            noise_indices: Indices selecting noise waveforms and their labels.
+            data_clean: Clean waveform data and labels.
+            data_noise: Noise waveform data and labels.
+            snr: Signal-to-noise ratio used for waveform combination.
+        
+        Returns:
+            A tuple containing the combined waveforms and their labels.
+        """
         combined_data = combine_waveforms((data_clean[0][clean_indices], data_clean[0][clean_indices]),
                                           (data_noise[0][noise_indices], data_noise[1][noise_indices]), snr_db=snr)
         return combined_data[0], combined_data[1]
 
     def process_and_save_data(self):
+        """
+        Generate and save test, validation, and training datasets from clean EEG, EOG, and EMG samples across configured SNR levels.
+        """
         clean_test_indices, clean_val_indices, clean_training_indices = self.split_indices(self.clean_indices, self.config.test_size, self.config.val_size)
         eog_test_indices, eog_val_indices, eog_training_indices = self.split_indices(self.eog_indices, self.config.test_size, self.config.val_size)
         emg_test_indices, emg_val_indices, emg_training_indices = self.split_indices(self.emg_indices, self.config.test_size, self.config.val_size)

@@ -17,6 +17,13 @@ from EEG_Artifact_Detection.models import ArtifactDetectionNN
 
 class ArtifactDetector:
     def __init__(self, ckpt_dir=None, device="cpu"):
+        """
+        Initialize the artifact detector with a checkpoint directory and computation device.
+        
+        Parameters:
+            ckpt_dir (str, optional): Directory containing the model checkpoint and preprocessing artifacts. Defaults to the bundled checkpoints directory.
+            device (str): Device used for model inference, such as ``"cpu"`` or ``"cuda"``.
+        """
         self.device = torch.device(device)
         
         if ckpt_dir is None:
@@ -29,6 +36,9 @@ class ArtifactDetector:
         self._load_preprocessors()
 
     def _load_model(self):
+        """
+        Load the trained artifact detection model from the configured checkpoint directory.
+        """
         model_path = os.path.join(self.ckpt_dir, "best_model.pth")
         print(f"[INFO] Loading model from {model_path}")
         
@@ -42,6 +52,11 @@ class ArtifactDetector:
         print("[SUCCESS] Model loaded")
 
     def _load_preprocessors(self):
+        """
+        Load the scaler and optional PCA preprocessing artifacts from the checkpoint directory.
+        
+        The scaler file is required. If the PCA file is unavailable, PCA preprocessing is disabled.
+        """
         scaler_path = os.path.join(self.ckpt_dir, "scaler.pkl")
         pca_path = os.path.join(self.ckpt_dir, "pca.pkl")
 
@@ -60,11 +75,31 @@ class ArtifactDetector:
             self.use_pca = False
 
     def _resample_to_256(self, ch, fs_in):
+        """
+        Resample a signal to a sampling rate of 256 Hz.
+        
+        Parameters:
+            ch: The input signal.
+            fs_in: The input signal's sampling rate in hertz.
+        
+        Returns:
+            The signal resampled to 256 Hz as a NumPy array of 64-bit floating-point values.
+        """
         if fs_in == 256:
             return np.asarray(ch, dtype=np.float64)
         return resample_poly(ch, 256, fs_in)
 
     def _segment_into_windows(self, sig):
+        """
+        Split a signal into contiguous 512-sample windows.
+        
+        Parameters:
+            sig: The input signal to segment.
+        
+        Returns:
+            A two-dimensional array containing complete 512-sample windows. Any trailing
+            samples that do not form a complete window are discarded.
+        """
         sig = np.asarray(sig, dtype=np.float64)
         n = (len(sig) // 512) * 512
         if n == 0:
@@ -72,6 +107,16 @@ class ArtifactDetector:
         return sig[:n].reshape(-1, 512)
 
     def predict_channel(self, channel, fs_in):
+        """
+        Compute artifact class probabilities for fixed-length windows of one EEG channel.
+        
+        Parameters:
+            channel: One-dimensional EEG signal.
+            fs_in: Sampling frequency of the input signal in hertz.
+        
+        Returns:
+            A NumPy array containing one probability row per complete window and one column per artifact class.
+        """
         ch256 = self._resample_to_256(channel, fs_in)
         windows = self._segment_into_windows(ch256)
         if len(windows) == 0:
@@ -90,6 +135,17 @@ class ArtifactDetector:
         return probs
 
     def predict_segment(self, eeg_data, fs_in):
+        """
+        Predict artifact probabilities for each channel in an EEG segment.
+        
+        Parameters:
+            eeg_data: EEG samples arranged as one channel or multiple channels.
+            fs_in: Sampling frequency of the input data in hertz.
+        
+        Returns:
+            A dictionary containing per-channel probability arrays, the mean artifact
+            probability across all windows, and the total number of analyzed windows.
+        """
         eeg_data = np.asarray(eeg_data)
         if eeg_data.ndim == 1:
             eeg_data = eeg_data.reshape(1, -1)

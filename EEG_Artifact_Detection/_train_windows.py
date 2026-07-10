@@ -1,4 +1,4 @@
-﻿import sys
+import sys
 sys.argv = [
     "main.py",
     "--datapath", "data",
@@ -22,6 +22,14 @@ trainer = MLPTrainer(load_config())  if False else None
 # minimal config object the trainer expects (argparse Namespace)
 import argparse
 def load_config():
+    """
+    Parse command-line options for the training workflow.
+    
+    Unknown command-line arguments are ignored.
+    
+    Returns:
+        argparse.Namespace: Parsed training configuration options.
+    """
     p = argparse.ArgumentParser()
     p.add_argument('--datapath', type=str)
     p.add_argument('--outputpath', type=str)

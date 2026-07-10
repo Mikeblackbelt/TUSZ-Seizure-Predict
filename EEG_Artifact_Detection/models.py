@@ -5,6 +5,11 @@ import torch.nn.functional as F
 
 class ArtifactDetectionNN(nn.Module):
     def __init__(self, input_dim):
+        """Initialize the three-class fully connected artifact detection model.
+        
+        Parameters:
+        	input_dim (int): Number of input features.
+        """
         super(ArtifactDetectionNN, self).__init__()
         self.fc1 = nn.Linear(input_dim, 128)
         self.fc2 = nn.Linear(128, 64)
@@ -13,6 +18,15 @@ class ArtifactDetectionNN(nn.Module):
         self.dropout = nn.Dropout(0.6)
 
     def forward(self, x):
+        """
+        Compute class scores for the input features.
+        
+        Parameters:
+            x (torch.Tensor): Input feature tensor.
+        
+        Returns:
+            torch.Tensor: Raw logits for the three artifact classes.
+        """
         x = self.relu(self.fc1(x))
         x = self.dropout(x)
         x = self.relu(self.fc2(x))
@@ -21,6 +35,12 @@ class ArtifactDetectionNN(nn.Module):
 
 class ArtifactDetectionCNN(nn.Module):
     def __init__(self, input_dim):
+        """
+        Initialize the convolutional neural network for three-class artifact classification.
+        
+        Parameters:
+            input_dim (int): Length of each input sequence.
+        """
         super(ArtifactDetectionCNN, self).__init__()
         self.conv1 = nn.Conv1d(in_channels=1, out_channels=32, kernel_size=7, padding=3)
         self.bn1 = nn.BatchNorm1d(32)
@@ -44,6 +64,15 @@ class ArtifactDetectionCNN(nn.Module):
 
 
     def _get_flatten_dim(self, input_dim):
+        """
+        Determine the flattened feature size produced by the convolutional layers.
+        
+        Parameters:
+            input_dim (int): Length of the input sequence.
+        
+        Returns:
+            int: Number of features produced after the convolutional and pooling layers.
+        """
         x = torch.zeros(1, 1, input_dim)  # Batch size 1, channels 1, length input_dim
         x = self.pool1(self.bn1(self.conv1(x)))
         x = self.pool2(self.bn2(self.conv2(x)))
@@ -52,6 +81,15 @@ class ArtifactDetectionCNN(nn.Module):
         return flatten_dim
 
     def forward(self, x):
+        """
+        Classifies each input sequence into one of three artifact classes.
+        
+        Parameters:
+            x (torch.Tensor): Input tensor shaped `(batch_size, input_dim)`.
+        
+        Returns:
+            torch.Tensor: Raw classification logits shaped `(batch_size, 3)`.
+        """
         x = x.unsqueeze(1)  # Add channel dimension
         x = self.pool1(F.relu(self.bn1(self.conv1(x))))
         x = self.pool2(F.relu(self.bn2(self.conv2(x))))
@@ -82,6 +120,16 @@ from torch.nn.modules.conv import Conv1d
 
 
 def flip(x, dim):
+    """
+    Reverse the elements of a tensor along the specified dimension.
+    
+    Parameters:
+        x (torch.Tensor): Tensor whose elements are reversed.
+        dim (int): Dimension along which to reverse the elements.
+    
+    Returns:
+        torch.Tensor: Tensor with elements reversed along `dim`.
+    """
     xsize = x.size()
     dim = x.dim() + dim if dim < 0 else dim
     x = x.contiguous()
@@ -97,6 +145,16 @@ def flip(x, dim):
 
 
 def sinc(band, t_right):
+    """
+    Construct a symmetric sinc kernel for the specified band and right-half time values.
+    
+    Parameters:
+        band (float): Frequency band used to compute the sinc values.
+        t_right (torch.Tensor): Right-half time values.
+    
+    Returns:
+        torch.Tensor: Full symmetric sinc kernel with a centered value of one.
+    """
     y_right = torch.sin(2 * math.pi * band * t_right) / (2 * math.pi * band * t_right)
     y_left = flip(y_right, 0)
 
@@ -131,10 +189,28 @@ class SincConv_fast(nn.Module):
 
     @staticmethod
     def to_mel(hz):
+        """
+        Convert a frequency from hertz to the mel scale.
+        
+        Parameters:
+            hz (float): Frequency in hertz.
+        
+        Returns:
+            float: The equivalent mel-scale frequency.
+        """
         return 2595 * np.log10(1 + hz / 700)
 
     @staticmethod
     def to_hz(mel):
+        """
+        Convert a mel-scale frequency to hertz.
+        
+        Parameters:
+            mel: Frequency value on the mel scale.
+        
+        Returns:
+            The equivalent frequency in hertz.
+        """
         return 700 * (10 ** (mel / 2595) - 1)
 
     def __init__(
@@ -152,6 +228,26 @@ class SincConv_fast(nn.Module):
         min_band_hz=1,
     ):
 
+        """
+        Initialize a learnable SincNet-style band-pass convolution layer.
+        
+        Parameters:
+            out_channels (int): Number of learnable band-pass filters.
+            kernel_size (int): Filter length; even values are increased by one.
+            sample_rate (int): Sampling rate of the input waveform in hertz.
+            in_channels (int): Number of input channels; must be 1.
+            stride (int): Convolution stride.
+            padding (int or str): Padding applied by the convolution.
+            dilation (int): Convolution dilation.
+            bias (bool): Whether to use a bias term; must be False.
+            groups (int): Number of convolution groups; must be 1.
+            min_low_hz (int or float): Minimum allowed lower cutoff frequency.
+            min_band_hz (int or float): Minimum allowed filter bandwidth.
+        
+        Raises:
+            ValueError: If the input has more than one channel, bias is enabled, or
+                grouped convolution is requested.
+        """
         super(SincConv_fast, self).__init__()
 
         if in_channels != 1:
@@ -213,14 +309,15 @@ class SincConv_fast(nn.Module):
 
     def forward(self, waveforms):
         """
-        Parameters
-        ----------
-        waveforms : `torch.Tensor` (batch_size, 1, n_samples)
-            Batch of waveforms.
-        Returns
-        -------
-        features : `torch.Tensor` (batch_size, out_channels, n_samples_out)
-            Batch of sinc filters activations.
+        Apply the learnable sinc-based filter bank to a batch of waveforms.
+        
+        Parameters:
+            waveforms (torch.Tensor): Input waveforms with shape
+                ``(batch_size, 1, n_samples)``.
+        
+        Returns:
+            torch.Tensor: Filter responses with shape
+                ``(batch_size, out_channels, n_samples_out)``.
         """
 
         self.n_ = self.n_.to(waveforms.device)
@@ -268,6 +365,15 @@ class ConvNet(nn.Module):
     def __init__(
         self, sr, sinc=True, min_band_hz=None, kernel_mult=None,
     ):
+        """
+        Initialize a convolutional feature extractor for waveform inputs.
+        
+        Parameters:
+            sr: Sampling rate of the input waveform.
+            sinc: Whether to use learnable Sinc-based convolution filters.
+            min_band_hz: Minimum filter bandwidth in hertz for the Sinc-based extractor.
+            kernel_mult: Divisor used to derive the convolution kernel size from the sampling rate.
+        """
         super().__init__()
         if not sinc:
             self.net = nn.Sequential(
@@ -310,6 +416,15 @@ class ConvNet(nn.Module):
     #     return filt, self.net(X)
 
     def forward(self, X):
+        """
+        Extracts features from one-dimensional input signals using the configured convolutional network.
+        
+        Parameters:
+            X: Input signals shaped as (batch, length).
+        
+        Returns:
+            Tensor containing the extracted features for each input signal.
+        """
         y_hat = X.unsqueeze(1)
         for idx, layer in enumerate(self.net):
             y_hat = layer(y_hat)

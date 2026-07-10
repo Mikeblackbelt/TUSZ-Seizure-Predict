@@ -1,4 +1,4 @@
-﻿import os, sys, types
+import os, sys, types
 os.environ.setdefault("MPLBACKEND", "Agg")  # headless: avoid plt.show() blocking
 
 import numpy as np
@@ -13,13 +13,36 @@ FS = 256  # EEGDenoiseNet sampling rate
 # ---- Step 4: bandpass filter 1-80 Hz (replicates helpers/epochs_filter.py) ----
 def custom_bandpass_filter(data, lowcut=1, highcut=80, fs=FS,
                            filter_length=101, pad_length=100):
-    nyq = 0.5 * fs
+    """
+                           Apply a zero-phase FIR bandpass filter to a one-dimensional signal.
+                           
+                           Parameters:
+                               data (array-like): Signal samples to filter.
+                               lowcut (float): Lower cutoff frequency in hertz.
+                               highcut (float): Upper cutoff frequency in hertz.
+                               fs (float): Sampling frequency in hertz.
+                               filter_length (int): Number of FIR filter coefficients.
+                               pad_length (int): Number of edge samples to pad on each side.
+                           
+                           Returns:
+                               numpy.ndarray: Filtered signal with the original length.
+                           """
+                           nyq = 0.5 * fs
     taps = firwin(filter_length, [lowcut/nyq, highcut/nyq], window="hann", pass_zero=False)
     padded = np.pad(data, pad_length, mode="edge")
     filtered = filtfilt(taps, 1.0, padded)
     return filtered[pad_length:-pad_length]
 
 def filter_signal(name):
+    """
+    Create a bandpass-filtered MATLAB dataset from a modality's epoch data.
+    
+    Parameters:
+        name (str): Modality name used to locate the input file and name the output variable.
+    
+    Raises:
+        FileNotFoundError: If the source NumPy file does not exist.
+    """
     src = DATA_DIR / f"{name}_all_epochs.npy"
     dst = DATA_DIR / f"filtered80Hz_{name}_all_epochs.mat"
     if dst.exists():
@@ -63,6 +86,14 @@ import argparse
 from MLPTrainer import MLPTrainer
 
 def load_config():
+    """
+    Parse command-line options for dataset preparation and model training.
+    
+    Returns:
+        argparse.Namespace: Parsed configuration values, including dataset paths,
+        split settings, training hyperparameters, logging options, runtime mode,
+        model selection, and dimensionality-reduction flags.
+    """
     p = argparse.ArgumentParser()
     p.add_argument("--datapath", type=str, default=str(DATA_DIR))
     p.add_argument("--outputpath", type=str, default="output")
