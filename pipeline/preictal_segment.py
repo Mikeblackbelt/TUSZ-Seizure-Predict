@@ -2,15 +2,20 @@ import os
 import pandas as pd
 from util import handle_logs
 
-logger = handle_logs.get_logger("make_master_file", "logs/app.log")
+logger = handle_logs.get_logger("make_master_file", "applog")
 
 SPLITS = ("train", "dev", "eval")
 
 
 def get_split(path):
     """
-    Determines whether a path belongs to train/dev/eval based on
-    TUSZ's directory structure (e.g. .../edf/train/01_tcp_ar/...).
+    Determine the dataset split for a path.
+    
+    Parameters:
+        path (str): File or directory path to inspect.
+    
+    Returns:
+        str: The first matching split name from `train`, `dev`, or `eval`, or `"unknown"` if none is found.
     """
     parts_lower = [p.lower() for p in os.path.normpath(path).split(os.sep)]
     for split in SPLITS:
@@ -21,9 +26,19 @@ def get_split(path):
 
 
 def get_unique_tags(dataset_path):
+    """
+    Scan CSV files under a dataset directory and collect unique label values.
+    
+    Parameters:
+    	dataset_path (str): Root directory to search recursively.
+    
+    Returns:
+    	set: Unique values found in the ``label`` column across readable CSV files.
+    """
     logger.info(f"Scanning for unique tags in {dataset_path}")
     tags = set()
     csv_count = 0
+    failed_count = 0
 
     for root, dirs, files in os.walk(dataset_path):
         for csv_file in [f for f in files if f.endswith(".csv")]:
@@ -31,21 +46,36 @@ def get_unique_tags(dataset_path):
             try:
                 df = pd.read_csv(csv_path, comment="#")
                 df.columns = df.columns.str.strip()
+                if "label" not in df.columns:
+                    logger.warning(f"Skipping {csv_path} - no 'label' column found")
+                    failed_count += 1
+                    continue
                 new_tags = set(df["label"].unique())
                 tags.update(new_tags)
                 csv_count += 1
                 logger.debug(f"Parsed {csv_path} - found tags: {new_tags}")
+            except KeyError as e:
+                logger.warning(f"Skipping {csv_path} - missing column {e}")
+                failed_count += 1
             except Exception as e:
                 logger.error(f"Failed to parse {csv_path}: {e}")
+                failed_count += 1
 
-    logger.info(f"Scanned {csv_count} CSV files - unique tags found: {tags}")
+    logger.info(f"Scanned {csv_count} valid CSV files, skipped {failed_count} - unique tags found: {tags}")
     return tags
 
 
 def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
     """
-    Walks the TUSZ dataset directory, reads all .csv annotation files,
-    and writes a single master CSV with seizure info, split, and source paths.
+    Build a master CSV from annotation files in a TUSZ-style dataset.
+    
+    Parameters:
+    	dataset_path: Root directory containing annotation CSV files and matching EDF files.
+    	output_path: Destination path for the generated master CSV.
+    	allow_tag: Collection of labels to keep. If omitted, all labels found in the dataset are included.
+    
+    Returns:
+    	A DataFrame containing the combined master rows, or None if no valid records are found.
     """
     logger.info(f"Building master file from {dataset_path}")
     records = []
@@ -76,6 +106,14 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
                 df = pd.read_csv(csv_path, comment="#")
                 df.columns = df.columns.str.strip()
 
+                # Validate required columns
+                required_cols = ["label", "start_time", "stop_time", "channel"]
+                missing = [c for c in required_cols if c not in df.columns]
+                if missing:
+                    logger.error(f"Skipping {csv_path} - missing columns: {missing}")
+                    skipped_parse_error += 1
+                    continue
+
                 filtered = df[df["label"].isin(allow_tag)].copy()
 
                 if filtered.empty:
@@ -103,7 +141,7 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
     )
 
     if not records:
-        logger.warning("No records found - master file not written")
+        logger.error("No records found - master file not written")
         return None
 
     master = pd.concat(records, ignore_index=True)
@@ -119,17 +157,36 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
 
 def add_preictal_tags(master_df, start_cutoff, max_duration):
     """
-    For each row in master_df, adds a new row tagged f'p{label}' representing
-    the preictal window:
-
-        raw_end   = ictal_start - start_cutoff
-        raw_start = ictal_start - start_cutoff - max_duration
-
-    Clamped to avoid negative timestamps. status indicates what got trimmed:
-        0 - nothing trimmed
-        1 - raw_start was trimmed to 0 (window shortened, but still valid)
-        2 - raw_end was trimmed to 0 (window collapses to [0, 0])
+    Add preictal window rows to a master annotations DataFrame.
+    
+    For each input row, creates a matching row labeled with a `p` prefix and
+    sets its time window to the interval ending `start_cutoff` seconds before
+    the original `start_time` and extending back up to `max_duration` seconds.
+    If the computed window would start before 0, it is clamped and marked with
+    a status value.
+    
+    Parameters:
+        master_df (pd.DataFrame): Master annotations table with at least
+            `split`, `edf_path`, `start_time`, `stop_time`, and `label` columns.
+        start_cutoff (numeric): Time gap to keep between the preictal window
+            end and the original `start_time`.
+        max_duration (numeric): Maximum length of each preictal window.
+    
+    Returns:
+        pd.DataFrame: The original rows plus the generated preictal rows, sorted
+        by split, EDF path, and start time.
+    
+    Raises:
+        ValueError: If master_df is None or empty.
     """
+    if master_df is None:
+        logger.error("master_df is None - cannot add preictal tags. Check that make_master_file() found valid records.")
+        raise ValueError("master_df cannot be None. No valid records found in dataset.")
+    
+    if master_df.empty:
+        logger.error("master_df is empty - cannot add preictal tags")
+        raise ValueError("master_df is empty. No valid records found in dataset.")
+    
     logger.info(
         f"Adding preictal tags (start_cutoff={start_cutoff}, max_duration={max_duration}) "
         f"to {len(master_df)} rows"
@@ -183,3 +240,109 @@ def add_preictal_tags(master_df, start_cutoff, max_duration):
 
     logger.info(f"Preictal tags added - master now has {len(result)} rows")
     return result
+
+def add_postictal_and_consecutive(master_df, postictal_length, preictal_length):
+    """
+    Add postictal and consecutive tags, then resolve overlaps with preictal.
+    """
+    if master_df is None or master_df.empty:
+        logger.error("master_df is None or empty - cannot add postictal/consecutive tags")
+        raise ValueError("master_df cannot be None or empty")
+    
+    logger.info(
+        f"Adding postictal (length={postictal_length}) and consecutive tags "
+        f"(threshold={postictal_length + preictal_length})"
+    )
+
+    new_rows = []
+    group_cols = ["edf_path", "channel"]
+
+    for (edf_path, channel), group in master_df.groupby(group_cols):
+        ictal = group[~group["label"].astype(str).str.startswith("p", na=False)].copy()
+        if ictal.empty:
+            continue
+
+        ictal = ictal.sort_values("start_time").reset_index(drop=True)
+
+        i = 0
+        while i < len(ictal):
+            row = ictal.iloc[i]
+            stop = float(row["stop_time"])
+            label = str(row["label"])
+
+            # Consecutive check
+            if i + 1 < len(ictal):
+                next_row = ictal.iloc[i + 1]
+                gap = float(next_row["start_time"]) - stop
+
+                if gap < (postictal_length + preictal_length):
+                    next_label = str(next_row["label"])
+                    c_label = f"c{label}2" if label == next_label else f"c{label}{next_label}"
+
+                    c_start = stop
+                    c_end = float(next_row["start_time"]) - preictal_length
+
+                    new_rows.append({
+                        **row.to_dict(),
+                        "label": c_label,
+                        "start_time": c_start,
+                        "stop_time": max(c_start, c_end),
+                        "status": 2 if c_end <= c_start else 0,
+                    })
+                    i += 2
+                    continue
+
+            # Postictal
+            new_rows.append({
+                **row.to_dict(),
+                "label": f"q{label}",
+                "start_time": stop,
+                "stop_time": stop + postictal_length,
+                "status": 0,
+            })
+            i += 1
+
+    if new_rows:
+        full_df = pd.concat([master_df, pd.DataFrame(new_rows)], ignore_index=True)
+    else:
+        full_df = master_df.copy()
+
+    full_df = resolve_overlaps(full_df)
+
+    return full_df.sort_values(["split", "edf_path", "channel", "start_time"]).reset_index(drop=True)
+
+def resolve_overlaps(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Keep only the highest priority annotation when overlaps occur on the same (edf_path, channel).
+    Priority: consecutive (c*) > preictal (p*) > original ictal > postictal (q*)
+    """
+    if df.empty:
+        return df
+
+    def get_priority(label):
+        lbl = str(label)
+        if lbl.startswith('c'):
+            return 4
+        if lbl.startswith('p'):
+            return 3
+        if lbl.startswith('q'):
+            return 1
+        return 2 
+    
+    df = df.copy()
+    df['priority'] = df['label'].apply(get_priority)
+    
+    df = df.sort_values(
+        by=['edf_path', 'channel', 'start_time', 'priority'],
+        ascending=[True, True, True, False]
+    )
+    
+    df = df.drop_duplicates(
+        subset=['edf_path', 'channel', 'start_time', 'stop_time'], 
+        keep='first'
+    )
+    
+    df = df.drop(columns=['priority'])
+    
+    logger.info(f"Overlap resolution complete. Final row count: {len(df)}")
+    return df

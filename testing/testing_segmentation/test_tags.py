@@ -8,7 +8,7 @@ from pipeline.preictal_segment import (
 )
 from util import handle_logs
 from testing.helpers import *
-logger = handle_logs.get_logger("test_pipeline", "logs/test.log")
+logger = handle_logs.get_logger("test_pipeline", "applog")
 
 def test_single_file_single_tag(dataset_dir):
     logger.info("test_single_file_single_tag: start")
