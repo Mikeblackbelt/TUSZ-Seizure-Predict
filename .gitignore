@@ -29,6 +29,36 @@ share/python-wheels/
 *.egg
 MANIFEST
 
+# Data files (very large)
+data/
+EEGdenoiseNet_src/
+
+# Checkpoints (generated after training)
+checkpoints/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment
+myenv/
+venv/
+.env
+
+# Output folders
+output/
+
+# Temporary files
+*.log
+train_log.txt
+_prepare_and_train.py   # Optional: if you want to regenerate it from PS1
+
+# OS files
+.DS_Store
+Thumbs.db
+
 # PyInstaller
 #   Usually these files are written by a python script from a template
 #   before PyInstaller builds the exe, so as to inject date/other infos into it.
