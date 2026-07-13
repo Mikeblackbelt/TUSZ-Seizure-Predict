@@ -39,6 +39,14 @@ def bandpass_filter_interval(edf_path, t1, t2, target_pattern_fn, low_cutoff=0.5
     win_start = max(0, t1_s - pad_s)
     win_end = min(n_samples, t2_s + pad_s)
 
+    nyquist = fs / 2
+    if low_cutoff <= 0:
+        raise ValueError(f"low_cutoff must be > 0, got {low_cutoff}")
+    if high_cutoff >= nyquist:
+        raise ValueError(f"high_cutoff must be < Nyquist ({nyquist} Hz), got {high_cutoff}")
+    if low_cutoff >= high_cutoff:
+        raise ValueError(f"low_cutoff ({low_cutoff}) must be < high_cutoff ({high_cutoff})")
+
     sos_high = butter(order, low_cutoff, btype='high', fs=fs, output='sos')
     sos_low = butter(order, high_cutoff, btype='low', fs=fs, output='sos')
 
