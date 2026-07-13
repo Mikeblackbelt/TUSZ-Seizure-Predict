@@ -151,7 +151,8 @@ class ArtifactDetector:
             eeg_data = eeg_data.reshape(1, -1)
 
         all_probs = [self.predict_channel(ch, fs_in) for ch in eeg_data]
-        flat_probs = np.vstack([p for p in all_probs if len(p) > 0]) if all_probs else np.zeros((0, 3))
+        non_empty = [p for p in all_probs if len(p) > 0]
+        flat_probs = np.vstack(non_empty) if non_empty else np.zeros((0, 3))
         artifact_frac = flat_probs[:, 1:].sum(axis=1).mean() if len(flat_probs) > 0 else 0.0
 
         return {
