@@ -37,6 +37,18 @@ def load_config():
 
 if __name__ == "__main__":
     config = load_config()
-    os.system(f'./env_setup.sh {config.mode}')
+import argparse
+from MLPTrainer import MLPTrainer
+import warnings
+import subprocess
+warnings.filterwarnings("ignore")
+
+...
+
+if __name__ == "__main__":
+    config = load_config()
+    subprocess.run(['./env_setup.sh', config.mode], check=False)
+    trainer = MLPTrainer(config)
+    trainer.run()
     trainer = MLPTrainer(config)
     trainer.run()
