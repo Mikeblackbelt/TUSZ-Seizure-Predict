@@ -7,11 +7,12 @@ To act on the *correct* stretch of the *native-rate* signal, we recompute the wi
 
 Windows are treated as contiguous and non-overlapping in the same order ArtifactDetector produces them (matches _segment_into_windows, which does sig[:n].reshape(-1, 512) with no overlap).
 """
-
+from util import handle_logs
 import numpy as np
 
 WINDOW_SECONDS = 2 # = 2.0s, fixed by ArtifactDetector's internal 256Hz/512-sample windowing
 
+logger = handle_logs.get_logger("artifact_masking", "logs/app.log")
 
 def build_artifact_mask(per_channel_probs, n_channels, n_samples_native,
                          fs_native, artifact_classes=(1, 2)):
@@ -24,6 +25,7 @@ def build_artifact_mask(per_channel_probs, n_channels, n_samples_native,
     """
     mask = np.zeros((n_channels, n_samples_native), dtype=bool)
     win_len_native = int(round(WINDOW_SECONDS * fs_native))
+    logger.info(f"Building artifact mask: n_channels={n_channels}, n_samples_native={n_samples_native}, fs_native={fs_native}, win_len_native={win_len_native}")
 
     for ch_idx, probs in enumerate(per_channel_probs):
         if len(probs) == 0:
@@ -115,7 +117,7 @@ if __name__ == "__main__":
     masked, mask = apply_zero_masking(data, fake_result, fs_native)
     assert masked.shape == data.shape
     assert (masked[mask] == 0.0).all()
-    print(f"[zero] flagged {mask.sum()} / {mask.size} samples ({100*mask.mean():.1f}%)")
+    logger.info(f"[zero] flagged {mask.sum()} / {mask.size} samples ({100*mask.mean():.1f}%)")
 
     # Interpolation self-test
     interp, mask2, fully_flagged = apply_interpolation_masking(data, fake_result, fs_native)
@@ -125,6 +127,6 @@ if __name__ == "__main__":
     assert not np.allclose(interp[mask2], data[mask2])
     # Unflagged samples must be untouched
     assert np.array_equal(interp[~mask2], data[~mask2])
-    print(f"[interp] replaced {mask2.sum()} samples via interpolation; "
-          f"fully-flagged channels: {fully_flagged}")
-    print("Self-test passed.")
+    logger.info(f"[interp] replaced {mask2.sum()} samples via interpolation; "
+                f"fully-flagged channels: {fully_flagged}")
+    logger.info("Self-test passed.")

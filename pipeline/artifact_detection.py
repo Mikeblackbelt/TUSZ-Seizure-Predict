@@ -4,6 +4,9 @@ import numpy as np
 import torch
 import pickle
 from scipy.signal import resample_poly
+from util import handle_logs
+
+logger = handle_logs.get_logger("artifact_detector", "applog")
 
 # Path setup
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -30,7 +33,7 @@ class ArtifactDetector:
             ckpt_dir = os.path.join("EEG_Artifact_Detection", "checkpoints")
         
         self.ckpt_dir = ckpt_dir
-        print(f"[INFO] Using checkpoints: {self.ckpt_dir}")
+        logger.info("Using checkpoints: %s", self.ckpt_dir)
 
         self._load_model()
         self._load_preprocessors()
@@ -40,7 +43,7 @@ class ArtifactDetector:
         Load the trained artifact detection model from the configured checkpoint directory.
         """
         model_path = os.path.join(self.ckpt_dir, "best_model.pth")
-        print(f"[INFO] Loading model from {model_path}")
+        logger.info("Loading model from %s", model_path)
         
         torch.serialization.add_safe_globals([ArtifactDetectionNN])
         import EEG_Artifact_Detection.models as models_mod
@@ -49,7 +52,7 @@ class ArtifactDetector:
         self.model = torch.load(model_path, map_location=self.device, weights_only=False)
         self.model.to(self.device)
         self.model.eval()
-        print("[SUCCESS] Model loaded")
+        logger.info("Model loaded")
 
     def _load_preprocessors(self):
         """
@@ -62,15 +65,15 @@ class ArtifactDetector:
 
         with open(scaler_path, "rb") as f:
             self.scaler = pickle.load(f)
-        print("[SUCCESS] Scaler loaded")
+        logger.info("Scaler loaded")
 
         if os.path.exists(pca_path):
             with open(pca_path, "rb") as f:
                 self.pca = pickle.load(f)
-            print("[SUCCESS] PCA loaded")
+            logger.info("PCA loaded")
             self.use_pca = True
         else:
-            print("[WARNING] pca.pkl not found → Running without PCA")
+            logger.warning("pca.pkl not found → Running without PCA")
             self.pca = None
             self.use_pca = False
 
