@@ -38,7 +38,7 @@ def test_load_edf_metadata_columns(test_edf_path):
     expected_columns = ['path', 'channels', 'sfreq', 'n_samples', 'duration_sec']
     for col in expected_columns:
         assert col in metadata.columns
-    logger.info("test_make_master_file_split_assigned: passed")
+    logger.info("test_load_edf_metadata_columns: passed")
 
 def test_load_edf_returns(test_edf_path):
     logger.info("test_load_edf_returns: start")
@@ -54,5 +54,6 @@ def test_load_edf_metadata_has_one_row(test_edf_path):
     _, metadata = load_edf(test_edf_path)
     assert len(metadata) == 1
     logger.info("test_load_edf_metadata_has_one_row: passed")
+
 
 

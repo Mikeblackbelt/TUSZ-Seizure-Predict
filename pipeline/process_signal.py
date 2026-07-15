@@ -9,20 +9,20 @@ def load_edf(path):
     raw = mne.io.read_raw_edf(path, preload=False, verbose=False)
     metadata = pd.DataFrame({
         "path": path,
-        "channels": raw.ch_names,
+        "channels": [raw.ch_names],
         "sfreq": raw.info["sfreq"],
         "n_samples": raw.n_times,
         "duration_sec": raw.n_times / raw.info["sfreq"]
     })
     return raw, metadata
 
-def split_into_epochs(edf_path, epoch_duration=30):
+def split_into_epochs(edf_path, epoch_duration=1):
     """
     Load EDF and split into fixed-length epochs.
     
     Parameters:
         edf_path: Path to EDF file
-        epoch_duration: Length of each epoch in seconds (default: 30)
+        epoch_duration: Length of each epoch in seconds 
     
     Returns:
         epochs: MNE Epochs object 
