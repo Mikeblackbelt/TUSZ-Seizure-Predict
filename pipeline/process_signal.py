@@ -1,13 +1,8 @@
 import mne
 import pandas as pd
-import sys
-import os
-
-# Add the parent directory (repo/) to Python path
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from util import handle_logs
 from testing.helpers import *
+
 logger = handle_logs.get_logger("process_signal", "logs/app.log")
 def load_edf(path):
     raw = mne.io.read_raw_edf(path, preload=False, verbose=False)
