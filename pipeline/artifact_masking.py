@@ -14,8 +14,7 @@ WINDOW_SECONDS = 2 # = 2.0s, fixed by ArtifactDetector's internal 256Hz/512-samp
 
 logger = handle_logs.get_logger("artifact_masking", "logs/app.log")
 
-def build_artifact_mask(per_channel_probs, n_channels, n_samples_native,
-                         fs_native, artifact_classes=(1, 2)):
+def build_artifact_mask(per_channel_probs, n_channels, n_samples_native, fs_native, artifact_classes=(1, 2)):
     """
     Returns a boolean mask, shape (n_channels, n_samples_native),
     True = flagged as artifact.
