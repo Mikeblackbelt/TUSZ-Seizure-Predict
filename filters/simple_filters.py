@@ -4,9 +4,8 @@ from scipy.signal import butter, sosfiltfilt
 
 def bandpass_filter_interval(edf_path, t1, t2, target_pattern_fn, low_cutoff=0.5, high_cutoff=40.0, pad_sec=5, order=4):
     """
-    Apply a high-pass and low-pass filter (combined) to only the channels
-    matching target_pattern_fn, within the [t1, t2] time interval (seconds).
-
+    Apply a Butterworth bandpass filter to selected channels over a time interval.
+    
     Parameters
     ----------
     edf_path : str
@@ -14,20 +13,28 @@ def bandpass_filter_interval(edf_path, t1, t2, target_pattern_fn, low_cutoff=0.5
     t1, t2 : float
         Start and end of the interval to filter, in seconds.
     target_pattern_fn : callable
-        Function taking a channel name string, returns True if it should be filtered.
-    low_cutoff : float
-        High-pass cutoff frequency in Hz (removes drift below this).
-    high_cutoff : float
-        Low-pass cutoff frequency in Hz (removes content above this).
-    pad_sec : float
-        Extra context (seconds) taken on each side to absorb filter edge transients.
-    order : int
-        Butterworth filter order (applied per stage).
-
+        Function that receives a channel name and returns whether that channel
+        should be filtered.
+    low_cutoff : float, default=0.5
+        High-pass cutoff frequency in Hz.
+    high_cutoff : float, default=40.0
+        Low-pass cutoff frequency in Hz.
+    pad_sec : float, default=5
+        Duration in seconds to include around the interval during filtering to
+        reduce edge transients.
+    order : int, default=4
+        Butterworth filter order for each filter stage.
+    
     Returns
     -------
-    raw : mne.io.Raw
-        The Raw object with the specified channels/interval filtered in place.
+    mne.io.Raw
+        The loaded Raw object with filtered data written to the selected channels
+        within the specified interval.
+    
+    Raises
+    ------
+    ValueError
+        If the cutoff frequencies are invalid.
     """
     raw = mne.io.read_raw_edf(edf_path, preload=True)
     fs = raw.info['sfreq']

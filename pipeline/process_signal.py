@@ -5,6 +5,16 @@ from testing.helpers import *
 
 logger = handle_logs.get_logger("process_signal", "logs/app.log")
 def load_edf(path):
+    """
+    Load an EDF file and collect metadata describing its recording.
+    
+    Parameters:
+        path: Path to the EDF file.
+    
+    Returns:
+        A tuple containing the MNE raw recording and a DataFrame with the file path,
+        channel names, sampling frequency, sample count, and duration in seconds.
+    """
     raw = mne.io.read_raw_edf(path, preload=False, verbose=False)
     metadata = pd.DataFrame({
         "path": path,
@@ -17,14 +27,14 @@ def load_edf(path):
 
 def split_into_epochs(edf_path, epoch_duration=1):
     """
-    Load EDF and split into fixed-length epochs.
+    Load an EDF recording and divide it into consecutive fixed-duration epochs.
     
     Parameters:
-        edf_path: Path to EDF file
-        epoch_duration: Length of each epoch in seconds 
+        edf_path: Path to the EDF file.
+        epoch_duration: Duration of each epoch in seconds.
     
     Returns:
-        epochs: MNE Epochs object 
+        epochs: MNE Epochs object containing the segmented recording.
     """
     raw = mne.io.read_raw_edf(str(edf_path), preload=True)
     
@@ -47,7 +57,17 @@ def split_into_epochs(edf_path, epoch_duration=1):
     )
     return epochs
 def standardize_channel_name(ch):
-    """Standardize a channel name by removing prefixes, reference suffixes, and non channels"""
+    """
+    Standardize an EEG channel name for channel matching.
+    
+    Parameters:
+        ch (str): Channel name beginning with ``EEG``.
+    
+    Returns:
+        str or None: The channel name without the ``EEG`` prefix, ``-LE`` or
+        ``-REF`` suffixes, and spaces; ``None`` for names without the ``EEG``
+        prefix.
+    """
     if not ch.startswith('EEG'):
         return None
     # Remove reference suffixes: -LE (linked ears), -REF (average reference)
@@ -58,7 +78,16 @@ def standardize_channel_name(ch):
     return new_name
 
 def standardize_channels_names(raw, metadata):
-    """Standardize channel names by removing prefixes and reference suffixes"""
+    """
+    Standardize EEG channel names and update the associated metadata.
+    
+    Parameters:
+        raw: Raw EEG data whose channel names should be standardized.
+        metadata: DataFrame containing the channel names in its first row.
+    
+    Returns:
+        tuple: The updated raw data and metadata.
+    """
     channel_map = {}
 
     eeg_channels = []
@@ -95,11 +124,15 @@ standard_channels = [
 
 def drop_channels(raw, metadata, desired_order=standard_channels):
     """
-    Drop channels not in desired_order and reorder in the raw and metadata
-    Returns None if any desired channel is missing.
-
-    Note that this most likely should be done only if we're trying to implement a model on an edge device,
-    or if we need to reduce the size of our dataset for storage reasons
+    Keep the raw signal channels in the requested set and order.
+    
+    Parameters:
+        raw: Raw signal data containing channel names.
+        metadata: DataFrame or mapping containing signal metadata.
+        desired_order: Channel names to retain and their required order.
+    
+    Returns:
+        The processed raw signal, or None if a requested channel is missing.
     """
 
     formatted_raw, _ = standardize_channels_names(raw, metadata)

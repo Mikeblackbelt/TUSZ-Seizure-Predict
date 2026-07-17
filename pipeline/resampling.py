@@ -5,23 +5,27 @@ from fractions import Fraction
 
 def resample_eeg(data: np.ndarray, orig_fs: float, target_fs: float) -> np.ndarray:
     """
-    Resample EEG data to a target sampling frequency using polyphase
-    filtering (anti-aliased, no FFT periodicity assumption).
-
+    Resample EEG data to a target sampling frequency using polyphase filtering.
+    
     Parameters
     ----------
-    data : np.ndarray, shape (n_channels, n_samples) or (n_samples,)
-        Raw EEG data. Time is assumed to be the last axis.
+    data : np.ndarray
+        EEG data with shape ``(n_channels, n_samples)`` or ``(n_samples,)``.
+        The time axis must be the last axis.
     orig_fs : float
-        Original sampling rate (e.g. 256, 250, 512).
+        Original sampling frequency.
     target_fs : float
-        Target sampling rate (e.g. 250).
-
+        Target sampling frequency.
+    
     Returns
     -------
     np.ndarray
-        Resampled data, same number of dims as input, with the time axis
-        rescaled by target_fs / orig_fs.
+        Resampled EEG data with the same number of dimensions as ``data``.
+    
+    Raises
+    ------
+    ValueError
+        If either sampling frequency is less than or equal to zero.
     """
     if orig_fs <= 0 or target_fs <= 0:
         raise ValueError(f"Sampling rates must be positive: orig_fs={orig_fs}, target_fs={target_fs}")
@@ -37,8 +41,14 @@ def resample_eeg(data: np.ndarray, orig_fs: float, target_fs: float) -> np.ndarr
 
 def rescale_sample_index(sample_idx: int, orig_fs: float, target_fs: float) -> int:
     """
-    Rescale a sample-index-based annotation boundary to match a resampled
-    signal. if  annotations are stored as sample indices
-    rather than timestamps in seconds.
+    Convert a sample index from the original sampling rate to its corresponding index at the target sampling rate.
+    
+    Parameters:
+        sample_idx (int): Sample index at the original sampling rate.
+        orig_fs (float): Original sampling rate in samples per second.
+        target_fs (float): Target sampling rate in samples per second.
+    
+    Returns:
+        int: Corresponding sample index at the target sampling rate, rounded to the nearest integer.
     """
     return round(sample_idx * (target_fs / orig_fs))

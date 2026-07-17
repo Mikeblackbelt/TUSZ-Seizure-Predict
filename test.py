@@ -26,8 +26,19 @@ SUPPORTED_EXTS = (".edf", ".npy")
 
 def load_eeg_file(path, fallback_fs):
     """
-    Load an EEG file into (data, fs, channel_names) with data shape (n_channels, n_samples).
-    channel_names is None when the source doesn't carry channel labels (plain .npy).
+    Load an EEG file and provide its samples, sampling frequency, and channel names.
+    
+    Parameters:
+        path (str): Path to an EDF or NPY file.
+        fallback_fs (float): Sampling frequency used for NPY files without an adjacent
+            `.fs.txt` sidecar.
+    
+    Returns:
+        tuple: A `(data, fs, channel_names)` tuple. `data` has shape
+            `(n_channels, n_samples)`, and `channel_names` is `None` for NPY files.
+    
+    Raises:
+        ValueError: If the file extension is unsupported.
     """
     ext = os.path.splitext(path)[1].lower()
 
@@ -55,20 +66,14 @@ def load_eeg_file(path, fallback_fs):
 
 def load_annotations(path):
     """
-    Look for a sidecar CSV with the same basename (TUSZ-style label file):
-
-        # version = csv_v1.0.0
-        # bname = aaaaabep_s001_t002
-        # duration = 1188.0000 secs
-        # montage_file = 02_tcp_le_montage.txt
-        #
-        channel,start_time,stop_time,label,confidence
-        FP1-F7,0.0059,1.0373,bckg,1
-
-    Comment lines (starting with '#') and blank lines are ignored. Returns
-    (entries, montage_file):
-        entries: {channel_name: [(start_sec, stop_sec, label), ...]}, or {} if no sidecar exists.
-        montage_file: the filename from the "# montage_file = ..." header comment, or None.
+    Load annotation intervals and optional montage metadata from a sidecar CSV file.
+    
+    Malformed data rows are skipped. Missing or invalid annotation files produce empty
+    entries while preserving any parsed montage filename.
+    
+    Returns:
+        tuple: A mapping of channel names to `(start_time, stop_time, label)` tuples
+        and the referenced montage filename, or `None` when unavailable.
     """
     csv_path = os.path.splitext(path)[0] + ".csv"
     if not os.path.exists(csv_path):
@@ -134,7 +139,13 @@ _CHANNEL_SUFFIX_RE = re.compile(r"-(REF|LE|AR|AVG|CZ)\d*$", re.IGNORECASE)
 
 
 def normalize_channel_name(name):
-    """Case/whitespace/reference-suffix-insensitive form of a channel name, for matching."""
+    """Normalize a channel name for matching by removing common prefixes, reference suffixes, and whitespace.
+    
+    Parameters:
+    	name (str): Channel name to normalize.
+    
+    Returns:
+    	str: Canonicalized channel name in uppercase."""
     n = name.strip().upper()
     n = _CHANNEL_PREFIX_RE.sub("", n)
     n = _CHANNEL_SUFFIX_RE.sub("", n)
@@ -144,18 +155,14 @@ def normalize_channel_name(name):
 
 def match_annotation_channels(channel_names, annotation_channel_names):
     """
-    Map each recording channel name -> the best-matching annotation-CSV channel
-    name, or None if nothing matched confidently.
-
-    Tries, in order: exact (normalized) match, then fuzzy match (difflib) against
-    the normalized annotation channel names, accepting only a reasonably
-    confident match (ratio >= 0.8) so e.g. "FP1-F7" vs "FP2-F8" doesn't get
-    silently confused for one another.
-
-    Returns (mapping: {channel_name: annotation_channel_name or None},
-             unmatched_annotation_channels: annotation channel names that
-             never matched any recording channel -- worth a look, could mean
-             a naming-convention mismatch is silently dropping events).
+    Map recording channels to their best-matching annotation channel names.
+    
+    Parameters:
+    	channel_names (iterable): Recording channel names to match.
+    	annotation_channel_names (iterable): Channel names from the annotation CSV.
+    
+    Returns:
+    	tuple: A mapping from each recording channel name to its matched annotation channel name or `None`, and a list of annotation channel names that were not matched.
     """
     norm_to_annot = {}
     for annot_name in annotation_channel_names:
@@ -197,6 +204,11 @@ _montage_file_index = None  # lazily built: {basename.lower(): full_path}
 
 
 def _index_montage_files(search_root):
+    """Index montage definition files below a search directory for later lookup.
+    
+    Parameters:
+    	search_root (str): Directory to search recursively for `.txt` montage files.
+    """
     global _montage_file_index
     _montage_file_index = {}
     for root, _dirs, files in os.walk(search_root):
@@ -237,18 +249,15 @@ def parse_montage_file(path):
 
 def guess_bipolar_split(name):
     """
-    Guess a bipolar montage channel name's two source electrodes from the name
-    itself -- e.g. "FP1-F7" is presumed to be "FP1" minus "F7". Splits on the
-    first '-' since standard 10-20 electrode labels (FP1, F7, T3, CZ, A1, ...)
-    don't themselves contain hyphens.
-
-    This is a fallback for when no montage definition file is available. It
-    can't verify which of the two channels comes first (sign convention) or
-    that this is really a bipolar pair rather than some other naming scheme --
-    just that it looks like one.
-
-    Returns (ch_a_raw, ch_b_raw), or None if `name` doesn't look like a
-    "X-Y" two-electrode pair.
+    Infer the two source electrode names from a bipolar channel label.
+    
+    Parameters:
+        name (str): Bipolar channel label containing two electrode names separated
+            by the first hyphen.
+    
+    Returns:
+        tuple[str, str] | None: The two electrode names, or None if the label does
+            not contain two non-empty parts.
     """
     parts = name.strip().split("-", 1)
     if len(parts) != 2 or not parts[0].strip() or not parts[1].strip():
@@ -258,20 +267,29 @@ def guess_bipolar_split(name):
 
 def build_derived_bipolar_channels(data, channel_names, derivations):
     """
-    Given raw (n_channels, n_samples) monopolar data and a list of
-    (bipolar_name, ch_a_raw, ch_b_raw) montage derivations, compute each
-    derivable bipolar channel as data[idx_a] - data[idx_b].
-
-    ch_a_raw/ch_b_raw are matched to channel_names using the same tiered
-    (exact-normalized -> fuzzy) matching as annotation channels.
-
-    Returns (derived_signals: {bipolar_name: 1D array}, unresolved: [bipolar_name, ...]
-             for derivations whose source channels weren't found in this recording).
+    Build derivable bipolar signals from monopolar EEG channels.
+    
+    Parameters:
+        data (numpy.ndarray): Monopolar channel data with shape `(n_channels, n_samples)`.
+        channel_names (Sequence[str]): Names corresponding to the rows of `data`.
+        derivations (Iterable[tuple]): Bipolar definitions as `(bipolar_name, source_a, source_b)`.
+    
+    Returns:
+        tuple: A mapping of bipolar names to `(source_a_index, source_b_index, signal)` tuples, and a list of bipolar names whose source channels could not be resolved.
     """
     norm_lookup = {normalize_channel_name(n): i for i, n in enumerate(channel_names)}
     norm_keys = list(norm_lookup.keys())
 
     def resolve(raw_name):
+        """
+        Resolve a raw channel name to its matching channel index.
+        
+        Parameters:
+            raw_name (str): Electrode name to match.
+        
+        Returns:
+            int or None: Matching channel index, or `None` if no channel matches.
+        """
         norm = normalize_channel_name(raw_name)
         if norm in norm_lookup:
             return norm_lookup[norm]
@@ -302,6 +320,20 @@ def find_all_files(folder):
 
 
 def pick_random_files(folder, n, seed=None):
+    """
+    Select up to a specified number of supported files from a folder recursively.
+    
+    Parameters:
+    	folder (str): Root folder to search.
+    	n (int): Maximum number of files to select.
+    	seed (int | None): Seed for reproducible selection.
+    
+    Returns:
+    	list[str]: Selected file paths relative to `folder`.
+    
+    Raises:
+    	SystemExit: If no supported files are found.
+    """
     files = find_all_files(folder)
     if not files:
         raise SystemExit(f"No {SUPPORTED_EXTS} files found under {folder!r} (searched recursively)")
@@ -320,7 +352,15 @@ def downsample_for_plot(y, max_points):
 
 
 def mask_to_spans(mask_row):
-    """Boolean 1D array -> list of [start, end] index spans where True."""
+    """
+    Convert a one-dimensional boolean mask into contiguous index spans.
+    
+    Parameters:
+    	mask_row: Boolean mask whose true regions should be identified.
+    
+    Returns:
+    	A list of [start, end] pairs, with end indices exclusive.
+    """
     spans = []
     in_span = False
     start = 0
@@ -352,9 +392,18 @@ def interpolate_1d_with_mask(signal, mask):
 
 
 def build_event_spans(events, fs, n_samples, mask):
-    """events: [(start_sec, stop_sec, label), ...] -> ([start_idx, stop_idx, label, overlap_pct, is_bckg], ...),
-    computing each span's overlap % with the given artifact mask. Includes "bckg" spans too
-    (tagged is_bckg=True) so the full label coverage is visible, not just seizure/artifact events."""
+    """
+    Convert time-based event annotations into sample-index spans with artifact overlap statistics.
+    
+    Parameters:
+        events (iterable): Event tuples containing start time, stop time, and label in seconds.
+        fs (float): Sampling frequency in samples per second.
+        n_samples (int): Number of samples used to clamp span boundaries.
+        mask (array-like): Boolean artifact mask aligned with the samples.
+    
+    Returns:
+        tuple: A tuple containing the event spans, the number of non-background events overlapping the mask, and the total number of non-background events. Each span is represented as [start index, stop index, label, overlap percentage, is_background].
+    """
     spans = []
     n_overlapping = 0
     n_non_bckg = 0
@@ -374,6 +423,20 @@ def build_event_spans(events, fs, n_samples, mask):
 
 
 def process_file(detector, folder, fname, fallback_fs, max_points, montage_dir=None):
+    """
+    Process one EEG file, compare zero masking with interpolation masking, and prepare report data.
+    
+    Parameters:
+    	detector: Artifact detector used to identify artifact intervals.
+    	folder (str): Root directory containing the EEG file.
+    	fname (str): Relative path of the EEG file within `folder`.
+    	fallback_fs: Sampling rate used when the input file does not provide one.
+    	max_points (int): Maximum number of samples retained for each plotted trace.
+    	montage_dir (str, optional): Directory to search for referenced montage files.
+    
+    Returns:
+    	dict: File metadata, artifact statistics, annotation overlap statistics, unresolved annotation channels, and per-channel plot data.
+    """
     path = os.path.join(folder, fname)
     data, fs, channel_names = load_eeg_file(path, fallback_fs)
     n_channels, n_samples = data.shape
@@ -821,12 +884,20 @@ onFileChange();
 
 
 def build_html_report(results, out_path):
+    """
+    Write an interactive HTML report containing the provided results.
+    
+    Parameters:
+    	results (object): Report data to serialize as JSON.
+    	out_path (str or os.PathLike): Destination path for the generated HTML file.
+    """
     html = HTML_TEMPLATE.replace("__DATA_JSON__", json.dumps(results))
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
 
 
 def main():
+    """Sample EEG files, compare masking strategies, and generate an HTML report."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("folder", help="Folder containing .edf / .npy EEG files (searched recursively)")
     parser.add_argument("--n", type=int, default=5, help="Number of random files to sample (default 5)")

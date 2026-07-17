@@ -12,16 +12,19 @@ from fractions import Fraction
 
 def detect_noise_frequencies(raw, max_freq=60, variance_threshold=0.20, power_percentile=80):
     """
-    Detects noise frequencies that are uniform across all channels. Same method as Madhi
-
+    Identify frequencies with high, consistent power across EEG channels.
+    
     Parameters:
-        raw: MNE Raw object
-        max_freq: max frequency to analyze (Hz)
-        variance_threshold: coefficient-of-variation threshold for uniformity
-        power_percentile: power percentile to consider a peak
-
+        raw: MNE Raw object containing the EEG data.
+        max_freq: Upper frequency limit for analysis, in Hz.
+        variance_threshold: Maximum cross-channel coefficient of variation for
+            considering a frequency uniform.
+        power_percentile: Percentile of mean normalized power used to select
+            high-power frequencies.
+    
     Returns:
-        List of detected noise frequencies
+        A list of detected noise frequencies in Hz, with nearby frequencies
+        grouped by their mean.
     """
     sfreq = raw.info['sfreq']
     data = raw.get_data()
@@ -79,7 +82,17 @@ def detect_noise_frequencies(raw, max_freq=60, variance_threshold=0.20, power_pe
 
 
 def apply_notch_filter(raw, noise_freqs, notch_width=2):
-    """Applies a notch filter at each detected noise frequency."""
+    """
+    Apply notch filters at the specified noise frequencies.
+    
+    Parameters:
+        raw: The MNE Raw object to filter.
+        noise_freqs: Frequencies, in hertz, at which to apply notch filters.
+        notch_width: Width of each notch filter.
+    
+    Returns:
+        A filtered copy of `raw`, or the original object when `noise_freqs` is empty.
+    """
     if not noise_freqs:
         return raw
 

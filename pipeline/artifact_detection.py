@@ -58,7 +58,7 @@ class ArtifactDetector:
         """
         Load the scaler and optional PCA preprocessing artifacts from the checkpoint directory.
         
-        The scaler file is required. If the PCA file is unavailable, PCA preprocessing is disabled.
+        The scaler is required. If the PCA artifact is unavailable, disable PCA preprocessing.
         """
         scaler_path = os.path.join(self.ckpt_dir, "scaler.pkl")
         pca_path = os.path.join(self.ckpt_dir, "pca.pkl")
@@ -79,14 +79,14 @@ class ArtifactDetector:
 
     def _resample_to_256(self, ch, fs_in):
         """
-        Resample a signal to a sampling rate of 256 Hz.
+        Resample a signal to 256 Hz.
         
         Parameters:
             ch: The input signal.
-            fs_in: The input signal's sampling rate in hertz.
+            fs_in: The input sampling rate in hertz.
         
         Returns:
-            The signal resampled to 256 Hz as a NumPy array of 64-bit floating-point values.
+            The signal resampled to 256 Hz.
         """
         if fs_in == 256:
             return np.asarray(ch, dtype=np.float64)

@@ -26,7 +26,8 @@ plt.rcParams.update({'font.size': 14})
 
 class MLPTrainer:
     def __init__(self, config):
-        """Initialize the trainer with the provided configuration and runtime components.
+        """
+        Initialize the trainer with the provided configuration and prepare its training and evaluation components.
         
         Parameters:
         	config: Configuration containing dataset paths, model settings, preprocessing options, and training parameters.
@@ -79,13 +80,13 @@ class MLPTrainer:
 
     def _load_test_datasets(self, test_dir):
         """
-        Load test datasets keyed by the SNR value extracted from each subdirectory name.
+        Load test datasets keyed by SNR strings extracted from subdirectory names.
         
         Parameters:
-        	test_dir (Path): Directory containing one subdirectory per test SNR.
+        	test_dir (Path): Directory containing one subdirectory for each test SNR.
         
         Returns:
-        	dict: Mapping of SNR values to their corresponding EEG datasets.
+        	dict: Mapping of SNR strings to their corresponding EEG datasets.
         """
         test_datasets = {}
         for snr_dir in test_dir.iterdir():
@@ -130,9 +131,10 @@ class MLPTrainer:
 
     def _preprocess_data(self):
         """
-        Preprocesses the training and validation features and saves the fitted preprocessors.
+        Preprocess the training and validation features and save the fitted preprocessors.
         
-        Standard scaling is always applied. Principal component analysis is also applied when enabled in the configuration.
+        Standard scaling is always applied. PCA is additionally applied when enabled in the
+        configuration, retaining the configured preprocessing state for later evaluation.
         """
         self.train_dataset.features, scaler = self._scale_data(self.train_dataset.features)
         self._save_preprocessor(scaler, 'scaler.pkl')
@@ -149,13 +151,13 @@ class MLPTrainer:
 
     def _scale_data(self, features):
         """
-        Scale feature data using a fitted standard scaler.
+        Scale feature data with a standard scaler.
         
         Parameters:
-            features: The feature data to fit and transform.
+            features: Feature data to scale.
         
         Returns:
-            tuple: The scaled feature data and the fitted scaler.
+            tuple: The scaled feature data and the fitted standard scaler.
         """
         scaler = StandardScaler()
         scaled_features = scaler.fit_transform(features)
@@ -233,7 +235,8 @@ class MLPTrainer:
         return train_loader, val_loader
 
     def train_one_epoch(self, epoch):
-        """Train the model for one epoch and record its training metrics.
+        """
+        Train the model for one epoch and record its training metrics.
         
         Parameters:
         	epoch (int): The current training epoch number.
@@ -257,10 +260,10 @@ class MLPTrainer:
 
     def validate_one_epoch(self, epoch):
         """
-        Evaluate the model on the validation dataset for one epoch and save improved checkpoints.
+        Evaluate the model on the validation dataset and save a checkpoint when validation loss improves.
         
         Parameters:
-        	epoch (int): The current training epoch.
+        	epoch (int): Training epoch used when recording validation metrics.
         """
         self.model.eval()
         val_loss, all_val_labels, all_val_preds = 0.0, [], []
@@ -346,13 +349,13 @@ class MLPTrainer:
 
     def _evaluate_test_set(self, test_loader, snr_value, test_accuracies, snr_values):
         """
-        Evaluate the model on a test dataset and record its classification results.
+        Evaluate the model on a test dataset and record its classification metrics.
         
         Parameters:
-        	test_loader: DataLoader providing test features and labels.
-        	snr_value: Signal-to-noise ratio associated with the test dataset.
-        	test_accuracies: List to which the test accuracy is appended.
-        	snr_values: List to which the corresponding SNR value is appended.
+            test_loader: DataLoader providing test features and labels.
+            snr_value: Signal-to-noise ratio associated with the test dataset.
+            test_accuracies: List to receive the computed test accuracy.
+            snr_values: List to receive the corresponding SNR value.
         """
         self.model.eval()
         test_loss, correct, total = 0.0, 0, 0
@@ -434,11 +437,11 @@ class MLPTrainer:
 
     def _plot_test_results(self, snr_values, test_accuracies):
         """
-        Plot test accuracy against SNR and save the resulting figure.
+        Plot test accuracy by signal-to-noise ratio and save the resulting figure.
         
         Parameters:
-            snr_values: SNR values represented on the horizontal axis.
-            test_accuracies: Test accuracy corresponding to each SNR value.
+            snr_values: Signal-to-noise ratio values for the horizontal axis.
+            test_accuracies: Test accuracy corresponding to each signal-to-noise ratio.
         """
         plt.figure(figsize=(15, 5))
         plt.plot(snr_values, test_accuracies, marker='o', color='b')

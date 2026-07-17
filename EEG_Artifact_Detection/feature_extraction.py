@@ -55,10 +55,10 @@ def apply_lowpass_filter(b, a, signal):
 
 def decimate_signal(signal, decimation_factor=16):
     """
-    Downsample a signal by selecting samples at a fixed interval.
+    Downsample a signal by selecting every `decimation_factor`-th sample.
     
     Parameters:
-        decimation_factor (int): Number of samples between selected values.
+        decimation_factor (int): Step between selected samples.
     
     Returns:
         The downsampled signal.
@@ -67,14 +67,14 @@ def decimate_signal(signal, decimation_factor=16):
 
 def wavelet_4th_level_approximation_simulation(signal, level=4):
     """
-    Approximate a wavelet decomposition level with low-pass signal features.
+    Create a low-frequency approximation of a signal using level-dependent filtering and decimation.
     
     Parameters:
         signal: The input signal.
-        level (int): The approximation level used to determine the filter cutoff and decimation factor.
+        level (int): The level used to determine the low-pass cutoff and decimation factor.
     
     Returns:
-        A flattened array containing the low-frequency approximation of the signal.
+        A one-dimensional array containing the low-frequency approximation.
     """
     fs = 256
     cutoff = fs / (2 ** (level + 1))

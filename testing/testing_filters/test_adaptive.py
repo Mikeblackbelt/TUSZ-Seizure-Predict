@@ -22,11 +22,37 @@ def make_raw(data, sfreq=SFREQ, ch_names=None):
     return mne.io.RawArray(data, info, verbose=False)
 
 def sine(freq, n_samples=N_SAMPLES, sfreq=SFREQ, amplitude=1.0, phase=0.0):
+    """
+    Generate a sampled sine wave.
+    
+    Parameters:
+    	freq (float): Frequency of the sine wave in hertz.
+    	n_samples (int): Number of samples to generate.
+    	sfreq (float): Sampling frequency in hertz.
+    	amplitude (float): Peak amplitude of the wave.
+    	phase (float): Initial phase in radians.
+    
+    Returns:
+    	np.ndarray: The generated sine-wave samples.
+    """
     t = np.arange(n_samples) / sfreq
     return amplitude * np.sin(2 * np.pi * freq * t + phase)
 
 def band_limited_noise(n_samples, sfreq, low, high, rng, amplitude=1.0):
-    """Random signal confined to [low, high] Hz, used as 'plausible EEG'."""
+    """
+    Generate band-limited noise with a specified amplitude.
+    
+    Parameters:
+        n_samples (int): Number of samples to generate.
+        sfreq (float): Sampling frequency in hertz.
+        low (float): Lower frequency bound in hertz.
+        high (float): Upper frequency bound in hertz.
+        rng: Random number generator used to create the noise.
+        amplitude (float): Standard deviation of the generated signal.
+    
+    Returns:
+        numpy.ndarray: Noise signal with shape `(n_samples,)`.
+    """
     white = rng.standard_normal(n_samples)
     sos = signal.butter(4, [low, high], btype="bandpass", fs=sfreq, output="sos")
     filtered = signal.sosfiltfilt(sos, white)

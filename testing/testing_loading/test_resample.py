@@ -1,11 +1,22 @@
- 
 import numpy as np
 import pytest
  
 from pipeline.resampling import resample_eeg, rescale_sample_index
 
 def make_sine(freq_hz: float, fs: float, duration_s: float, n_channels: int = 1) -> np.ndarray:
-    """Generate a clean sine wave, optionally tiled across channels."""
+    """
+    Generate a sine wave sampled at the specified rate.
+    
+    Parameters:
+        freq_hz (float): Sine-wave frequency in hertz.
+        fs (float): Sampling rate in hertz.
+        duration_s (float): Signal duration in seconds.
+        n_channels (int): Number of channels to generate.
+    
+    Returns:
+        np.ndarray: The sine wave, or identical copies arranged by channel when
+            `n_channels` is greater than one.
+    """
     t = np.arange(0, duration_s, 1.0 / fs)
     sig = np.sin(2 * np.pi * freq_hz * t)
     if n_channels == 1:
