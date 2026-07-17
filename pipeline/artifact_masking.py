@@ -16,11 +16,19 @@ logger = handle_logs.get_logger("artifact_masking", "logs/app.log")
 
 def build_artifact_mask(per_channel_probs, n_channels, n_samples_native, fs_native, artifact_classes=(1, 2)):
     """
-    Returns a boolean mask, shape (n_channels, n_samples_native),
-    True = flagged as artifact.
-
-    per_channel_probs: list of arrays (one per channel), each shape (n_windows, n_classes), what ArtifactDetector.predict_segment()["per_channel_probs"] returns.
-    artifact_classes: which predicted class indices count as "artifact". 
+    Build a native-rate artifact mask from per-window channel probabilities.
+    
+    Parameters:
+        per_channel_probs: Per-channel probability arrays with shape
+            ``(n_windows, n_classes)``.
+        n_channels: Number of channels in the output mask.
+        n_samples_native: Number of samples in the output mask.
+        fs_native: Native sampling rate in hertz.
+        artifact_classes: Predicted class indices treated as artifacts.
+    
+    Returns:
+        A boolean array of shape ``(n_channels, n_samples_native)`` where
+        ``True`` marks samples classified as artifacts.
     """
     mask = np.zeros((n_channels, n_samples_native), dtype=bool)
     win_len_native = int(round(WINDOW_SECONDS * fs_native))
@@ -44,8 +52,19 @@ def build_artifact_mask(per_channel_probs, n_channels, n_samples_native, fs_nati
 
 def apply_zero_masking(data, detector_result, fs_native, artifact_classes=(1, 2)):
     """
-    Returns (masked_data, mask): flagged windows zeroed out.
-    Keep `mask` around to also exclude those samples from a loss function, zeros alone can look like flat signal to a downstream model.
+    Replace artifact-flagged samples with zero values while preserving the original data.
+    
+    Parameters:
+        data (numpy.ndarray): Multichannel native-rate data with shape
+            (n_channels, n_samples).
+        detector_result (dict): Detector output containing per-channel window
+            probabilities under the ``"per_channel_probs"`` key.
+        fs_native (float): Native sampling frequency in hertz.
+        artifact_classes (tuple): Class indices that identify artifact windows.
+    
+    Returns:
+        tuple: The masked data copy and a boolean mask where ``True`` marks
+            artifact-flagged samples.
     """
     n_channels, n_samples = data.shape
     mask = build_artifact_mask(
@@ -60,12 +79,20 @@ def apply_zero_masking(data, detector_result, fs_native, artifact_classes=(1, 2)
 
 def apply_interpolation_masking(data, detector_result, fs_native, artifact_classes=(1, 2)):
     """
-    Returns (interpolated_data, mask, fully_flagged_channels):
-
-    For each channel, flagged samples are replaced with a linear interpolation across the nearest clean samples on either side (np.interp). 
-    Samples before the first clean sample or after the last clean sample get the nearest clean value held constant rather than extrapolated.
-
-    If an entire channel has no clean samples at all (fully_flagged), that channel is left untouched in the output and its index is returned in fully_flagged_channels so you can decide how to handle it (e.g. drop the channel, or fallback to zeroing for that channel specifically).
+    Replace artifact-flagged samples with per-channel interpolated values.
+    
+    Parameters:
+        data (numpy.ndarray): Multichannel native-rate data with shape
+            ``(n_channels, n_samples)``.
+        detector_result (dict): Detector output containing
+            ``"per_channel_probs"``.
+        fs_native (float): Native sampling rate in hertz.
+        artifact_classes (tuple[int, ...]): Class indices treated as artifacts.
+    
+    Returns:
+        tuple: Interpolated data, the boolean artifact mask, and a list of
+            channel indices whose samples were all flagged. Fully flagged
+            channels are returned unchanged.
     """
     n_channels, n_samples = data.shape
     mask = build_artifact_mask(

@@ -34,11 +34,12 @@ class DataNoiseCombiner:
         
         Parameters:
             path (str or pathlib.Path): Path to a `.mat`, `.csv`, or `.npy` file.
-            label (int, optional): Label assigned to every loaded sample.
+            label (int, optional): Label assigned to every loaded sample. Labels `1` and `2`
+                cause samples to be repeated or truncated to match the clean dataset length.
         
         Returns:
-            tuple: The waveform array and an array containing the assigned label for
-            each sample, or `None` when no label is provided.
+            tuple: The waveform array and an array containing the assigned label for each
+                sample, or `None` when no label is provided.
         
         Raises:
             ValueError: If the file has an unsupported extension.
@@ -55,7 +56,8 @@ class DataNoiseCombiner:
 
     @staticmethod
     def shuffle_indices(length):
-        """Return a randomly shuffled array of indices from zero to length minus one.
+        """
+        Create a randomized ordering of integer indices from zero through length minus one.
         
         Parameters:
         	length (int): Number of indices to generate.
@@ -117,7 +119,9 @@ class DataNoiseCombiner:
 
     def process_and_save_data(self):
         """
-        Generate and save test, validation, and training datasets from clean EEG, EOG, and EMG samples across configured SNR levels.
+        Generate and save test, validation, and training datasets from clean EEG, EOG, and EMG samples.
+        
+        Test datasets are generated across the configured SNR range, while validation and training datasets use the corresponding splits without an explicit SNR.
         """
         clean_test_indices, clean_val_indices, clean_training_indices = self.split_indices(self.clean_indices, self.config.test_size, self.config.val_size)
         eog_test_indices, eog_val_indices, eog_training_indices = self.split_indices(self.eog_indices, self.config.test_size, self.config.val_size)

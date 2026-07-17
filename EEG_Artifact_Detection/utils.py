@@ -27,13 +27,13 @@ class EarlyStopping:
 
     def __call__(self, val_loss):
         """
-        Update early-stopping state with a validation loss value.
+        Update early-stopping state using the current validation loss.
         
         Parameters:
-            val_loss: The current validation loss.
+        	val_loss: The current validation loss.
         
         Returns:
-            `true` if the patience threshold has been reached, `false` otherwise.
+        	bool: `true` if the patience threshold has been reached, `false` otherwise.
         """
         if self.best_loss is None:
             self.best_loss = val_loss
@@ -77,15 +77,15 @@ def calculate_metrics(y_true, y_pred):
 
 def combine_waveforms(clean, noise, snr_db):
     """
-    Combine clean and noise waveforms at a target signal-to-noise ratio.
+    Combine clean and noise waveforms at a specified or randomly sampled signal-to-noise ratio.
     
     Parameters:
-        clean: Array-like data containing clean waveform samples at index 0.
-        noise: Array-like data containing noise waveform samples at index 0 and a label at index 1.
-        snr_db: Target signal-to-noise ratio in decibels. If None, an SNR is sampled independently for each noise sample.
+        clean: Array-like data containing clean waveforms at index 0.
+        noise: Array-like data containing noise waveforms at index 0 and a label at index 1.
+        snr_db: Target signal-to-noise ratio in decibels, or None to sample an SNR independently for each noise waveform.
     
     Returns:
-        tuple: The combined waveforms and an array of labels repeated for each noise sample.
+        tuple: The combined waveforms and labels repeated for each noise waveform.
     """
     rms = lambda x: np.sqrt(np.mean(x ** 2, axis=1))
     clean_EEG = clean[0]
