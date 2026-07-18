@@ -7,7 +7,7 @@ from pathlib import Path
 CONFIG_FILE = "app_path.json"
 
 def get_logger(name: str, log_pseudo: str = None, level: int = logging.DEBUG) -> logging.Logger:
-    """
+    r"""
     Create a configured logger with console output and optional file output.
     
     Parameters:
