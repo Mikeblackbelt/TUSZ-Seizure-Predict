@@ -1,0 +1,158 @@
+"""
+  - apply_zero_masking          -> zero out flagged windows
+  - apply_interpolation_masking -> replace flagged windows with a linear interpolation across the surrounding clean samples, per channel
+
+ArtifactDetector.predict_channel resamples each channel to 256Hz and segments into 512-sample windows -- i.e. each window = 512 / 256 = 2.0 seconds, regardless of native fs. 
+To act on the *correct* stretch of the *native-rate* signal, we recompute the window length in native samples (round(2.0 * fs_native)) rather than assuming 512 directly, since 512 only applies at 256Hz.
+
+Windows are treated as contiguous and non-overlapping in the same order ArtifactDetector produces them (matches _segment_into_windows, which does sig[:n].reshape(-1, 512) with no overlap).
+"""
+from util import handle_logs
+import numpy as np
+
+WINDOW_SECONDS = 2 # = 2.0s, fixed by ArtifactDetector's internal 256Hz/512-sample windowing
+
+logger = handle_logs.get_logger("artifact_masking", "logs/app.log")
+
+def build_artifact_mask(per_channel_probs, n_channels, n_samples_native, fs_native, artifact_classes=(1, 2)):
+    """
+    Build a native-rate artifact mask from per-window channel probabilities.
+    
+    Parameters:
+        per_channel_probs: Per-channel probability arrays with shape
+            ``(n_windows, n_classes)``.
+        n_channels: Number of channels in the output mask.
+        n_samples_native: Number of samples in the output mask.
+        fs_native: Native sampling rate in hertz.
+        artifact_classes: Predicted class indices treated as artifacts.
+    
+    Returns:
+        A boolean array of shape ``(n_channels, n_samples_native)`` where
+        ``True`` marks samples classified as artifacts.
+    """
+    mask = np.zeros((n_channels, n_samples_native), dtype=bool)
+    win_len_native = int(round(WINDOW_SECONDS * fs_native))
+    logger.info(f"Building artifact mask: n_channels={n_channels}, n_samples_native={n_samples_native}, fs_native={fs_native}, win_len_native={win_len_native}")
+
+    for ch_idx, probs in enumerate(per_channel_probs):
+        if len(probs) == 0:
+            continue
+        pred = probs.argmax(axis=1)
+        for w, cls in enumerate(pred):
+            if cls not in artifact_classes:
+                continue
+            start = w * win_len_native
+            if start >= n_samples_native:
+                break
+            end = min(start + win_len_native, n_samples_native)
+            mask[ch_idx, start:end] = True
+
+    return mask
+
+
+def apply_zero_masking(data, detector_result, fs_native, artifact_classes=(1, 2)):
+    """
+    Replace artifact-flagged samples with zero values while preserving the original data.
+    
+    Parameters:
+        data (numpy.ndarray): Multichannel native-rate data with shape
+            (n_channels, n_samples).
+        detector_result (dict): Detector output containing per-channel window
+            probabilities under the ``"per_channel_probs"`` key.
+        fs_native (float): Native sampling frequency in hertz.
+        artifact_classes (tuple): Class indices that identify artifact windows.
+    
+    Returns:
+        tuple: The masked data copy and a boolean mask where ``True`` marks
+            artifact-flagged samples.
+    """
+    n_channels, n_samples = data.shape
+    mask = build_artifact_mask(
+        detector_result["per_channel_probs"],
+        n_channels, n_samples, fs_native,
+        artifact_classes=artifact_classes,
+    )
+    masked_data = data.copy()
+    masked_data[mask] = 0.0
+    return masked_data, mask
+
+
+def apply_interpolation_masking(data, detector_result, fs_native, artifact_classes=(1, 2)):
+    """
+    Replace artifact-flagged samples with per-channel interpolated values.
+    
+    Parameters:
+        data (numpy.ndarray): Multichannel native-rate data with shape
+            ``(n_channels, n_samples)``.
+        detector_result (dict): Detector output containing
+            ``"per_channel_probs"``.
+        fs_native (float): Native sampling rate in hertz.
+        artifact_classes (tuple[int, ...]): Class indices treated as artifacts.
+    
+    Returns:
+        tuple: Interpolated data, the boolean artifact mask, and a list of
+            channel indices whose samples were all flagged. Fully flagged
+            channels are returned unchanged.
+    """
+    n_channels, n_samples = data.shape
+    mask = build_artifact_mask(
+        detector_result["per_channel_probs"],
+        n_channels, n_samples, fs_native,
+        artifact_classes=artifact_classes,
+    )
+
+    interpolated = data.copy()
+    fully_flagged_channels = []
+    all_idx = np.arange(n_samples)
+
+    for ch in range(n_channels):
+        ch_mask = mask[ch]
+        if not ch_mask.any():
+            continue  # nothing flagged on this channel
+
+        clean_idx = all_idx[~ch_mask]
+        if len(clean_idx) == 0:
+            fully_flagged_channels.append(ch)
+            continue
+
+        flagged_idx = all_idx[ch_mask]
+        interpolated[ch, flagged_idx] = np.interp(
+            flagged_idx, clean_idx, data[ch, clean_idx]
+        )
+
+    return interpolated, mask, fully_flagged_channels
+
+
+if __name__ == "__main__":
+    n_channels, n_samples, fs_native = 2, 5120, 512
+    rng = np.random.default_rng(0)
+    data = rng.standard_normal((n_channels, n_samples)).astype(np.float64)
+
+    # Fake detector_result: 10 windows/channel, alternating clean/artifact.
+    n_windows = 10
+    fake_probs = []
+    for ch in range(n_channels):
+        probs = np.zeros((n_windows, 3))
+        for w in range(n_windows):
+            cls = w % 3
+            probs[w, cls] = 1.0
+        fake_probs.append(probs)
+    fake_result = {"per_channel_probs": fake_probs, "artifact_fraction": 0.5, "total_windows": n_windows}
+
+    # Zeroing self-test
+    masked, mask = apply_zero_masking(data, fake_result, fs_native)
+    assert masked.shape == data.shape
+    assert (masked[mask] == 0.0).all()
+    logger.info(f"[zero] flagged {mask.sum()} / {mask.size} samples ({100*mask.mean():.1f}%)")
+
+    # Interpolation self-test
+    interp, mask2, fully_flagged = apply_interpolation_masking(data, fake_result, fs_native)
+    assert interp.shape == data.shape
+    assert np.array_equal(mask, mask2)
+    # Flagged samples should no longer equal the noisy original (with overwhelming probability)
+    assert not np.allclose(interp[mask2], data[mask2])
+    # Unflagged samples must be untouched
+    assert np.array_equal(interp[~mask2], data[~mask2])
+    logger.info(f"[interp] replaced {mask2.sum()} samples via interpolation; "
+                f"fully-flagged channels: {fully_flagged}")
+    logger.info("Self-test passed.")

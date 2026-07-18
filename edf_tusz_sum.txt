@@ -1,0 +1,19 @@
+Files scanned: 8140
+
+Sampling rate distribution:
+     256.0 Hz : 6071 file(s)
+     250.0 Hz : 1171 file(s)
+     400.0 Hz : 658 file(s)
+     512.0 Hz : 130 file(s)
+    1000.0 Hz : 110 file(s)
+
+Distinct channel-label sets found: 54
+  865 file(s) with 33 channels: ['BURSTS', 'EEG 31-REF', 'EEG 32-REF', 'EEG A1-REF', 'EEG A2-REF', 'EEG C3-REF']...
+  629 file(s) with 27 channels: ['BURSTS', 'EEG A1-REF', 'EEG A2-REF', 'EEG C3-REF', 'EEG C4-REF', 'EEG CZ-REF']...
+  558 file(s) with 34 channels: ['BURSTS', 'EEG 31-REF', 'EEG 32-REF', 'EEG A1-REF', 'EEG A2-REF', 'EEG C3-REF']...
+  473 file(s) with 29 channels: ['BURSTS', 'EEG A1-REF', 'EEG A2-REF', 'EEG C3-REF', 'EEG C4-REF', 'EEG CZ-REF']...
+  467 file(s) with 32 channels: ['EEG 20-REF', 'EEG 21-REF', 'EEG 22-REF', 'EEG 23-REF', 'EEG 24-REF', 'EEG 25-REF']...
+
+Channels common to ALL 8140 files (0): []
+
+Duration range: 1.0s - 1800.0s (mean 652.2s)
