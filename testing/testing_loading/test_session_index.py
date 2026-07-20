@@ -3,15 +3,24 @@ from pipeline.session_index import index_sessions, _parse_montage_type
 from testing.helpers import *  # noqa: F401,F403  (write_edf, dataset_dir)
 
 
-def _make_recording(dataset_dir, split, patient, session, recording_folder,
-                     n_edf=1, n_csv_bi=1):
-    rec_dir = dataset_dir / "edf" / split / patient / session / recording_folder
-    rec_dir.mkdir(parents=True, exist_ok=True)
-    for i in range(n_edf):
-        write_edf(rec_dir / f"rec_{i}.edf")
-    for i in range(n_csv_bi):
-        write_edf(rec_dir / f"rec_{i}.csv_bi")
-    return rec_dir
+@pytest.fixture
+def make_recording(dataset_dir):
+    """
+     returns a function that creates a fake recording
+    folder (with dummy .edf/.csv_bi files) under dataset_dir, so each
+    test can build however many recordings it needs.
+    """
+    def _make_recording(split, patient, session, recording_folder,
+                         n_edf=1, n_csv_bi=1):
+        rec_dir = dataset_dir / "edf" / split / patient / session / recording_folder
+        rec_dir.mkdir(parents=True, exist_ok=True)
+        for i in range(n_edf):
+            write_edf(rec_dir / f"rec_{i}.edf")
+        for i in range(n_csv_bi):
+            write_edf(rec_dir / f"rec_{i}.csv_bi")
+        return rec_dir
+
+    return _make_recording
 
 
 def test_montage_type_ar():
@@ -30,8 +39,8 @@ def test_montage_type_unknown_prefix():
     assert _parse_montage_type("weird_folder") == "unk0"
 
 
-def test_index_single_session(dataset_dir):
-    _make_recording(dataset_dir, "train", "p001", "s001_2015", "01_tcp_ar")
+def test_index_single_session(dataset_dir, make_recording):
+    make_recording("train", "p001", "s001_2015", "01_tcp_ar")
     sessions = index_sessions(str(dataset_dir))
 
     assert len(sessions) == 1
@@ -47,10 +56,10 @@ def test_index_single_session(dataset_dir):
     assert len(record["csv_bi_paths"]) == 1
 
 
-def test_index_multiple_recordings_same_session(dataset_dir):
+def test_index_multiple_recordings_same_session(dataset_dir, make_recording):
     """Multiple recording folders under one session should merge into one record."""
-    _make_recording(dataset_dir, "train", "p001", "s001_2015", "01_tcp_ar", n_edf=2)
-    _make_recording(dataset_dir, "train", "p001", "s001_2015", "01_tcp_ar_b", n_edf=1)
+    make_recording("train", "p001", "s001_2015", "01_tcp_ar", n_edf=2)
+    make_recording("train", "p001", "s001_2015", "01_tcp_ar_b", n_edf=1)
     sessions = index_sessions(str(dataset_dir))
 
     # different recording_folder names produce different montage-type suffixes,
@@ -60,8 +69,8 @@ def test_index_multiple_recordings_same_session(dataset_dir):
     assert total_edf == 3
 
 
-def test_index_multiple_files_within_one_recording_dir(dataset_dir):
-    _make_recording(dataset_dir, "train", "p001", "s001_2015", "01_tcp_ar", n_edf=3, n_csv_bi=1)
+def test_index_multiple_files_within_one_recording_dir(dataset_dir, make_recording):
+    make_recording("train", "p001", "s001_2015", "01_tcp_ar", n_edf=3, n_csv_bi=1)
     sessions = index_sessions(str(dataset_dir))
 
     key = next(iter(sessions))
@@ -69,10 +78,10 @@ def test_index_multiple_files_within_one_recording_dir(dataset_dir):
     assert sessions[key]["edf_paths"] == sorted(sessions[key]["edf_paths"])
 
 
-def test_index_multiple_sessions_and_splits(dataset_dir):
-    _make_recording(dataset_dir, "train", "p001", "s001_2015", "01_tcp_ar")
-    _make_recording(dataset_dir, "dev", "p002", "s001_2016", "02_tcp_le")
-    _make_recording(dataset_dir, "eval", "p003", "s001_2017", "01_tcp_ar")
+def test_index_multiple_sessions_and_splits(dataset_dir, make_recording):
+    make_recording("train", "p001", "s001_2015", "01_tcp_ar")
+    make_recording("dev", "p002", "s001_2016", "02_tcp_le")
+    make_recording("eval", "p003", "s001_2017", "01_tcp_ar")
     sessions = index_sessions(str(dataset_dir))
 
     assert len(sessions) == 3
