@@ -63,7 +63,8 @@ def index_sessions(dataset_path):
             skipped_unknown_split += 1
             continue
 
-        split_idx = parts_lower.index(split)
+        # Find the rightmost occurrence to avoid matching parent directory names
+        split_idx = len(parts_lower) - 1 - parts_lower[::-1].index(split)
 
         try:
             patient_id = parts[split_idx + 1]
