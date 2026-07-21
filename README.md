@@ -1,8 +1,29 @@
 # Tuh-Preprocess
 
-Preprocessing pipeline for the [TUSZ (Temple University Seizure) corpus](https://isip.piconepress.com/projects/tuh_eeg/), built to prepare EEG annotation data for a seizure prediction model. The pipeline scans a TUSZ dataset directory, builds a master CSV of seizure events, and generates **preictal**, **postictal**, and **consecutive** windows around each event so a downstream model can learn the full temporal structure surrounding a seizure, not just the moment before onset.
+An EEG seizure prediction/categorization preprocessing pipeline built on the [TUSZ (Temple University Seizure) corpus](https://isip.piconepress.com/projects/tuh_eeg/). The repo has two processes that plug into each other:
 
-## What this does
+1. **Annotation pipeline** (`pipeline/preictal_segment.py`) - scans a TUSZ dataset directory, builds a master CSV of seizure events, and generates **preictal**, **postictal**, and **consecutive** windows around each event. At the point of writing (7/20/2026), the master csv is outdated as it fails to consider that sessions are segmented into files. This will be fixed in the upcoming commits. 
+2. **Signal pipeline** (`pipeline/process_signal.py`, `pipeline/resampling.py`, `filters/`, `pipeline/artifact_detection.py`, `pipeline/artifact_masking.py`) - loads and standardizes raw `.edf` recordings, resamples and filters them, and detects/masks non-cerebral artifacts (EOG/EMG) using a classifier trained in the standalone `EEG_Artifact_Detection/` module.
+
+## Attribution
+
+- The EOG/EMG artifact-classification approach (`EEG_Artifact_Detection/`, used by `pipeline/artifact_detection.py`) follows Hossein Enshaei, Pariya Jebreili, and Sayed Mahmoud Sakhaei, *"Real-time Noise Detection and Classification in Single-Channel EEG: A Lightweight Machine Learning Approach for EMG, White Noise, and EOG Artifacts"* (Babol Noshirvani University of Technology).
+- The `SincNet` model option (`EEG_Artifact_Detection/models.py`) is adapted from Francesco Paissan's implementation of SincNet, based on Mirco Ravanelli and Yoshua Bengio, *"Speaker Recognition from Raw Waveform with SincNet"*.
+- The adaptive notch filter (`filters/adaptive_filters.py`) uses the methods of Mahdi, M., & Baghdadi, A. (2026).
+
+## Requirements
+
+- Python 3.10+
+- Install dependencies:
+
+```bash
+pip install -r requirements.txt
+pip install -r EEG_Artifact_Detection/requirements.txt   # only needed to (re)train the artifact classifier
+```
+
+## 1. Annotation pipeline
+
+### What this does
 
 1. Walks a TUSZ dataset directory and reads every `.csv` annotation file (each row is a labeled time segment (e.g. `fnsz`, `gnsz`, `bckg`) tied to a `.edf` recording and a specific `channel`).
 2. Filters those rows down to a set of seizure tags you select.
@@ -14,54 +35,42 @@ Preprocessing pipeline for the [TUSZ (Temple University Seizure) corpus](https:/
 6. Resolves any remaining overlaps between generated windows sharing identical time boundaries on the same channel, keeping only the highest-priority row.
 7. Writes the combined result (ictal + preictal + postictal/consecutive rows) back out as a single CSV, ready for downstream feature extraction / model training.
 
-## Requirements
+### Usage
 
-- Python 3.10+
-- Install dependencies:
+The pipeline is driven directly through `pipeline/preictal_segment.py`'s functions - scan for tags, build the master file, then layer on preictal/postictal/consecutive tags:
 
-```bash
-pip install -r requirements.txt
+```python
+from pipeline import preictal_segment
+
+tags = preictal_segment.get_unique_tags("<path-to-tusz-dataset>")
+
+master_df = preictal_segment.make_master_file(
+    "<path-to-tusz-dataset>",
+    output_path="master_full.csv",
+    allow_tag=tags,          # or a subset of tags
+)
+master_df = preictal_segment.add_preictal_tags(
+    master_df, start_cutoff=300, max_duration=600,
+)
+master_df = preictal_segment.add_postictal_and_consecutive(
+    master_df, postictal_length=300, preictal_length=600,
+)
+master_df.to_csv("master_full.csv", index=False)
 ```
 
-## Usage
+`add_postictal_and_consecutive` calls `resolve_overlaps` automatically, so no separate call is needed. Before running against real data, validate the input path with `util.verify_data.validate_input(data_path)` (see [Data validation](#data-validation-utilverify_datapy) below).
 
-Full Segmentation Pipeline
-```bash
-python segment.py <path-to-tusz-dataset> [--log_path logs\app.log]
-```
+### Pipeline internals (`pipeline/preictal_segment.py`)
 
-Running `segment.py` walks you through the full segmentation process interactively:
-
-1. **Data validation** - confirms the input path exists, lists its contents, and asks you to visually confirm the data looks right before continuing.
-2. **Unit tests** - runs the full test suite (`testing/`) before touching real data. If any test fails, the pipeline aborts.
-3. **Tag selection** - scans the dataset for every unique seizure label present and lets you pick (via checkbox) which ones to include.
-4. **Window configuration** - prompts for preictal (`start_cutoff`, `max_duration`), and postictal/consecutive (`postictal_length`, `preictal_length`) parameters (see below).
-5. **Output path** - prompts for where to write the resulting CSV.
-6. **Master file generation** - builds the master CSV of selected events.
-7. **Preictal tagging** - appends a preictal row for every event row.
-8. **Postictal and consecutive tagging** - appends either a postictal row or a consecutive row for every event row, depending on the gap to the next seizure on the same channel.
-9. **Overlap resolution** - drops lower-priority rows that share identical time boundaries with a higher-priority row on the same channel, then writes the final combined CSV.
-
-### Arguments
-
-| Argument | Description | Default |
-|---|---|---|
-| `input_path` (positional) | Path to the root of the TUSZ dataset to process | - |
-| `--log_path` | Path to write the run log to | `logs\app.log` |
-
-## Pipeline internals
-
-All core logic lives in `pipeline/preictal_segment.py`.
-
-### `get_unique_tags(dataset_path)`
+#### `get_unique_tags(dataset_path)`
 
 Recursively scans `dataset_path` for `.csv` annotation files and returns the set of every unique value in the `label` column across the whole dataset. Used to populate the tag-selection prompt and as the default filter (every tag) if none is explicitly provided.
 
-### `get_split(path)`
+#### `get_split(path)`
 
 Infers which TUSZ split (`train`, `dev`, or `eval`) a file belongs to by checking the path's directory components (case-insensitive), matching TUSZ's native layout (e.g. `.../edf/train/01_tcp_ar/...`). Returns `"unknown"` if none of the three match, and logs a warning when that happens.
 
-### `make_master_file(dataset_path, output_path="master.csv", allow_tag=None)`
+#### `make_master_file(dataset_path, output_path="master.csv", allow_tag=None)`
 
 Walks `dataset_path`, and for every `.csv` annotation file with a matching `.edf` recording:
 
@@ -75,7 +84,7 @@ Writes the combined result to `output_path` and returns it as a DataFrame. Retur
 
 `status == -1` always identifies an original TUSZ row, never a generated one.
 
-### `add_preictal_tags(master_df, start_cutoff, max_duration)`
+#### `add_preictal_tags(master_df, start_cutoff, max_duration)`
 
 For every row in `master_df`, generates a corresponding preictal row labeled `p{original_label}` (e.g. `fnsz` → `pfnsz`), representing the window of time *before* the seizure that a model should learn to recognize as a warning sign.
 
@@ -100,7 +109,7 @@ Both values are clamped to never go negative, and a `status` column on every pre
 
 The returned DataFrame contains both the original rows and the new preictal rows, sorted by `split`, `edf_path`, then `start_time`.
 
-### `add_postictal_and_consecutive(master_df, postictal_length, preictal_length)`
+#### `add_postictal_and_consecutive(master_df, postictal_length, preictal_length)`
 
 For every original (non-preictal) row, grouped by `(edf_path, channel)` and walked in `start_time` order, decides between two outcomes based on the gap to the *next* seizure on that same channel:
 
@@ -116,7 +125,7 @@ After generating these rows, `resolve_overlaps` is called automatically on the c
 
 The returned DataFrame contains the original rows, the new preictal rows (if already present), and the new postictal/consecutive rows, sorted by `split`, `edf_path`, `channel`, then `start_time`.
 
-### `resolve_overlaps(df)`
+#### `resolve_overlaps(df)`
 
 Assigns each row a priority based on its label prefix:
 
@@ -126,57 +135,121 @@ consecutive (c)  >  preictal (p)  >  original ictal  >  postictal (q)
 
 Rows are sorted by `(edf_path, channel, start_time, priority)` and then deduplicated on exact `(edf_path, channel, start_time, stop_time)` matches, keeping only the highest-priority row in each group. This means `resolve_overlaps` removes rows that share **identical time boundaries** with a higher-priority row on the same channel - it does not clip or trim rows whose time ranges only partially overlap with different start/stop values; such partial overlaps are left in the output as-is.
 
+### `pipeline/session_index.py`
+
+`index_sessions(dataset_path)` walks a TUSZ split and groups every `.edf`/`.csv`/`.csv_bi` file by session, keyed by a composed ID like `trn_p001_s001_2015_ar1` (split prefix + patient ID + session ID + montage type, parsed from folder names like `01_tcp_ar`). Each entry records the split, patient/session IDs, montage type, and the sorted list of `.edf`/`.csv`/`.csv_bi` paths belonging to that session. Logs and skips directories where the split can't be determined or the directory depth doesn't match TUSZ's `<split>/<patient>/<session>/<recording>` layout.
+
+## 2. Signal pipeline
+
+### Loading and channel standardization (`pipeline/process_signal.py`)
+
+- `load_edf(path)` - loads a `.edf` recording via MNE (`preload=False`) and returns it alongside a metadata DataFrame (path, channel names, sampling frequency, sample count, duration).
+- `split_into_epochs(edf_path, epoch_duration=1)` - loads a recording and segments it into fixed-length, non-overlapping MNE `Epochs`.
+- `standardize_channel_name(ch)` - strips the `EEG` prefix and `-LE`/`-REF` reference suffixes from a raw TUSZ channel name (e.g. `EEG FP1-REF` → `FP1`).
+- `standardize_channels_names(raw, metadata)` - applies `standardize_channel_name` across a recording, drops non-electrode channels (e.g. `PHOTIC PH`), and updates the metadata's channel list to match.
+- `drop_channels(raw, metadata, desired_order=standard_channels)` - standardizes channel names, then keeps and reorders only the 19 standard 10-20 channels (`FP1, FP2, F7, F3, FZ, F4, F8, T3, C3, CZ, C4, T4, T5, P3, PZ, P4, T6, O1, O2`). Returns `None` (and logs a warning) if any of those channels is missing from the recording; logs when extra channels are dropped.
+
+### Resampling (`pipeline/resampling.py`)
+
+- `resample_eeg(data, orig_fs, target_fs)` - polyphase-resamples `(n_channels, n_samples)` or `(n_samples,)` EEG data to a target sampling rate (`scipy.signal.resample_poly`, rational up/down factors from `Fraction(target_fs/orig_fs).limit_denominator(1000)`). No-ops if the rates already match.
+- `rescale_sample_index(sample_idx, orig_fs, target_fs)` - converts a single sample index between sampling rates.
+
+### Filtering (`filters/`)
+
+- **`simple_filters.bandpass_filter_interval`** - applies a zero-phase Butterworth bandpass (default 0.5-40 Hz) to selected channels over a specific time interval, with a padded window around the interval to reduce edge transients (`sosfiltfilt`).
+- **`adaptive_filters.detect_noise_frequencies`** / **`apply_notch_filter`** - identifies line-noise-like frequencies (high power, low cross-channel variation in the normalized Welch PSD, following Mahdi & Baghdadi (2026)) and notch-filters them out with MNE's `spectrum_fit` method.
+
+### Artifact detection and masking
+
+`pipeline/artifact_detection.py` (`ArtifactDetector`) loads the trained model/scaler/PCA from `EEG_Artifact_Detection/checkpoints/` (see [EEG_Artifact_Detection](#3-eeg_artifact_detection-training-the-artifact-classifier) below) and classifies EEG signal windows as clean/EOG/EMG:
+
+- `predict_channel(channel, fs_in)` - resamples a channel to 256 Hz, segments it into contiguous 512-sample (2 s) windows, extracts features, and returns per-window class probabilities.
+- `predict_segment(eeg_data, fs_in)` - runs `predict_channel` across every channel in a segment and returns per-channel probabilities, the mean artifact probability, and the total window count.
+
+`pipeline/artifact_masking.py` turns those predictions into a native-rate boolean mask (`build_artifact_mask`, recomputing the window length in native samples since the detector's windows are fixed at 2 s regardless of the original sampling rate) and offers two ways to act on it:
+
+- `apply_zero_masking` - zeros out flagged samples.
+- `apply_interpolation_masking` - replaces flagged samples with a per-channel linear interpolation across the surrounding clean samples; channels that are fully flagged are left unchanged and reported separately.
+
+## 3. `EEG_Artifact_Detection/` - training the artifact classifier
+
+A standalone module (with its own `requirements.txt`) that trains the 3-class (clean EEG / EOG / EMG) classifier consumed by `pipeline/artifact_detection.py`.
+
+1. Loads clean EEG epochs alongside EOG and EMG noise epochs, already bandpass-filtered to 0-80 Hz.
+2. Synthetically combines clean EEG with EOG/EMG noise at a range of SNRs to build labeled 3-class data (`DataNoiseCombiner`), split into `train`/`val`/per-SNR `test` sets and z-scored per epoch.
+3. Extracts a feature vector per epoch: a level-4 wavelet-style low-frequency approximation concatenated with the epoch's power spectral density.
+4. Trains a classifier - `MLP` (`ArtifactDetectionNN`), 1D `CNN` (`ArtifactDetectionCNN`), or `SincNet` (`ConvNet` with a learnable `SincConv_fast` filter bank) - with optional PCA/ICA, early stopping, and checkpointing.
+5. Evaluates the best checkpoint across every SNR level, logging accuracy/F1/precision/recall per SNR and saving accuracy-vs-SNR and per-SNR confusion-matrix plots.
+
+```bash
+cd EEG_Artifact_Detection
+python main.py --model MLP --pca --ica   # or --model CNN / --model SincNet
+```
+
+Checkpoints (`best_model.pth`) and preprocessors (`scaler.pkl`, `pca.pkl`) are written to `checkpoints/`, which is exactly where `pipeline/artifact_detection.py` looks for them by default. See `EEG_Artifact_Detection/README.md` for the full argument reference, data layout, and internals of that module.
+
 ## Data validation (`util/verify_data.py`)
 
-Before the pipeline touches any files, `validate_input(data_path)`:
+Call `validate_input(data_path)` before pointing the annotation pipeline at real data:
 
 1. Confirms `data_path` exists (`verify_data_path`).
 2. Confirms it's a non-empty directory (`verify_data_integrity`).
 3. Lists every file in the directory for a quick visual sanity check (`list_files_glob`).
 4. Asks for interactive `y`/`n` confirmation before the run proceeds.
 
-## Logging (`util/handle_logs.py`)
+## Logging and config (`util/handle_logs.py`)
 
-`get_logger(name, log_file=None, level=logging.DEBUG)` returns a standard `logging.Logger` that writes to both stdout and (if `log_file` is given) a file handler, auto-creating any missing parent directories. Loggers are keyed by `name` and re-fetching the same name returns the same configured logger rather than duplicating handlers.
+- `get_logger(name, log_pseudo=None, level=logging.DEBUG)` returns a standard `logging.Logger` that always writes to stdout and, if `log_pseudo` is given, also to a file - either a direct path (if it contains a `/`/`\` or ends in `.log`) or a key looked up in `app_path.json`. Loggers are keyed by `name`; re-fetching the same name returns the same configured logger rather than duplicating handlers.
+- `load_config()` / `save_config(config)` read and write `app_path.json`, which stores defaults like the log path across runs.
 
 ## Testing
 
-The full suite lives in `testing/` and runs automatically as the first step of `segment.py`. To run it manually:
+The full suite lives in `testing/`. Run it with:
 
 ```bash
 python -m pytest testing/ -v
 ```
+or simply
+```bash
+pytest
+```
 
-| File | Covers |
+| Directory / file | Covers |
 |---|---|
-| `test_logging.py` | Logger creation and file output |
-| `test_tags.py` | `get_unique_tags` - single/multiple files, nested directories, malformed CSVs, non-CSV files |
-| `test_split.py` | `get_split` - train/dev/eval detection, case-insensitivity, unknown paths |
-| `test_masterfile.py` | `make_master_file` - column output, tag filtering, missing `.edf` handling, empty directories |
-| `test_preictal.py` | `add_preictal_tags` - window math, all three status codes, sort order, original rows left untouched |
-| `test_postictal_consecutive.py` | `add_postictal_and_consecutive` - postictal vs. consecutive branching, same-label vs. different-label consecutive naming, last-seizure-in-channel handling |
-| `test_resolve_overlaps.py` | `resolve_overlaps` - priority ordering, exact-boundary deduplication, partial overlaps left untouched |
+| `testing/test_logging.py` | Logger creation and file output |
+| `testing/testing_segmentation/` | `get_unique_tags`, `get_split`, `make_master_file`, `add_preictal_tags`, `add_postictal_and_consecutive`, `resolve_overlaps` |
+| `testing/testing_filters/` | Bandpass and adaptive-notch filtering |
+| `testing/testing_loading/` | EDF loading and channel standardization |
+| `testing/testing_pipeline/` | Signal-processing pipeline components (resampling, artifact detection/masking) |
 
-Shared fixtures (`write_csv`, `write_edf`, `dataset_dir`) live in `testing/helpers.py`.
+Shared fixtures (`write_csv`, `write_edf`, `dataset_dir`, and related helpers) live in `testing/helpers.py`.
 
 ## Project structure
 
 ```
 .
-├── segment.py                  # CLI entry point
+├── app_path.json                     # saved defaults (e.g. log path)
 ├── pipeline/
-│   └── preictal_segment.py     # core scan / master-file / preictal / postictal / overlap logic
+│   ├── preictal_segment.py           # master-file / preictal / postictal / overlap logic
+│   ├── session_index.py              # groups TUSZ files by session
+│   ├── process_signal.py             # EDF loading + channel standardization
+│   ├── resampling.py                 # polyphase resampling
+│   ├── artifact_detection.py         # ArtifactDetector - loads the trained classifier for inference
+│   └── artifact_masking.py           # turns detector output into a mask; zero/interpolation masking
+├── filters/
+│   ├── simple_filters.py             # bandpass filtering
+│   └── adaptive_filters.py           # adaptive notch filtering (Mahdi & Baghdadi, 2026)
+├── EEG_Artifact_Detection/           # standalone training module for the artifact classifier
+│   └── README.md                     # full docs for this module
 ├── util/
-│   ├── handle_logs.py          # shared logger factory
-│   └── verify_data.py          # input path validation
+│   ├── handle_logs.py                # shared logger factory + app_path.json config
+│   └── verify_data.py                # input path validation
 ├── testing/
-│   ├── helpers.py              # shared pytest fixtures
+│   ├── helpers.py                    # shared pytest fixtures
 │   ├── test_logging.py
-│   ├── test_tags.py
-│   ├── test_split.py
-│   ├── test_masterfile.py
-│   ├── test_preictal.py
-│   ├── test_postictal_consecutive.py
-│   └── test_resolve_overlaps.py
+│   ├── testing_segmentation/
+│   ├── testing_filters/
+│   ├── testing_loading/
+│   └── testing_pipeline/
 └── requirements.txt
 ```
