@@ -113,4 +113,5 @@ def index_sessions(dataset_path):
     )
     return sessions
 
-session = index_sessions("dev")
+if __name__ == "__main__":
+    session = index_sessions("dev")
