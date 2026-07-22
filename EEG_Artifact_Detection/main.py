@@ -1,14 +1,20 @@
 import argparse
-from MLPTrainer import MLPTrainer
-import warnings
 import os
+import shutil
+import subprocess
+import warnings
+
+from MLPTrainer import MLPTrainer
+
 warnings.filterwarnings("ignore")
+
+PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def load_config():
     """
     Parse command-line arguments for dataset, training, logging, and execution settings.
-    
+
     Returns:
         argparse.Namespace: Parsed configuration values.
     """
@@ -35,20 +41,30 @@ def load_config():
     args = parser.parse_args()
     return args
 
+
+def get_setup_command(mode):
+    script_path = os.path.join(PROJECT_DIR, 'env_setup.sh')
+    if os.name == 'nt':
+        for candidate in ('bash', 'sh'):
+            resolved = shutil.which(candidate)
+            if resolved:
+                linux_path = script_path.replace('C:\\', '/mnt/c/').replace('\\', '/')
+                return [resolved, '-lc', f'"{linux_path}" {mode}']
+        raise RuntimeError('Bash or sh is required to run env_setup.sh on Windows.')
+
+    bash_path = shutil.which('bash')
+    if bash_path:
+        return [bash_path, '-lc', f'"{script_path}" {mode}']
+    return ['/bin/sh', '-lc', f'"{script_path}" {mode}']
+
+
+def run_setup_script(mode):
+    subprocess.run(get_setup_command(mode), cwd=PROJECT_DIR, check=True)
+
+
 if __name__ == "__main__":
     config = load_config()
-import argparse
-from MLPTrainer import MLPTrainer
-import warnings
-import subprocess
-warnings.filterwarnings("ignore")
-
-...
-
-if __name__ == "__main__":
-    config = load_config()
-    subprocess.run(['./env_setup.sh', config.mode], check=False)
+    run_setup_script(config.mode)
     trainer = MLPTrainer(config)
     trainer.run()
-    trainer = MLPTrainer(config)
-    trainer.run()
+

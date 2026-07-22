@@ -6,6 +6,8 @@ from pathlib import Path
 import termcolor
 import torch
 import torch.optim as optim
+import matplotlib
+matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader
@@ -453,7 +455,7 @@ class MLPTrainer:
         plt.grid(True)
         plt.savefig(os.path.join(self.config.outputpath, 'snr_accuracy.png'))
         if not self.config.no_plot:
-            plt.show()
+            plt.show(block=False)
 
     def plot_metrics(self):
         """
@@ -474,7 +476,7 @@ class MLPTrainer:
         plt.legend()
         plt.savefig(os.path.join(self.config.outputpath, f'combined_curves.png'))
         if not self.config.no_plot:
-            plt.show()
+            plt.show(block=False)
 
     def run(self):
         """
