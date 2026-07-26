@@ -78,33 +78,33 @@ def concatenate_session_eeg(session, session_key=None, output_dir=None):
     return combined
 
 #test
+if __name__ == "__main__":
+    from pipeline.session_index import index_sessions
+    from pipeline.raw_eeg_extraction import concatenate_session_eeg
+    import time
 
-from pipeline.session_index import index_sessions
-from pipeline.raw_eeg_extraction import concatenate_session_eeg
-import time
+    sessions = index_sessions("dev")
+    session_keys = list(sessions.keys())[:10]
 
-sessions = index_sessions("dev")
-session_keys = list(sessions.keys())[:10]
+    for key in session_keys:
+        session = sessions[key]
 
-for key in session_keys:
-    session = sessions[key]
+        print(f"\n at key {key}")
+        print(f"  {len(session['edf_paths'])} .edf files")
 
-    print(f"\n at key {key}")
-    print(f"  {len(session['edf_paths'])} .edf files")
+        start_time = time.time()
 
-    start_time = time.time()
+        result = concatenate_session_eeg(
+            session,
+            session_key=key,
+            output_dir="raweeg_output"
+        )
 
-    result = concatenate_session_eeg(
-        session,
-        session_key=key,
-        output_dir="raweeg_output"
-    )
+        elapsed = time.time() - start_time
 
-    elapsed = time.time() - start_time
-
-    if result is not None:
-        print(f"\nShape: {result.shape}")
-        print(f"Saved to: raweeg_output/{key}.npy")
-        print(f"Time consumed: {elapsed:.2f} seconds")
-    else:
-        print("No .edf files in this session")
+        if result is not None:
+            print(f"\nShape: {result.shape}")
+            print(f"Saved to: raweeg_output/{key}.npy")
+            print(f"Time consumed: {elapsed:.2f} seconds")
+        else:
+            print("No .edf files in this session")
