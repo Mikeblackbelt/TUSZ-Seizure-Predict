@@ -28,6 +28,7 @@ def main():
     parser.add_argument("--val-frac", type=float, default=0.15, help="Fraction of PATIENTS held out for validation")
     parser.add_argument("--test-frac", type=float, default=0.15, help="Fraction of PATIENTS held out for test")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--max-windows", type=int, default=2000, help="Cap on windows per split to keep dataset builds bounded (use -1 for unbounded)")
 
     parser.add_argument("--train", action="store_true", help="Also train MLPTrainer on the built dataset")
     parser.add_argument("--model", default="MLP", choices=["MLP", "CNN", "SincNet"])
@@ -51,6 +52,7 @@ def main():
         args.val_frac,
         args.test_frac,
         args.seed,
+        args.max_windows,
     ) #placeholder for now
 
     if args.train:

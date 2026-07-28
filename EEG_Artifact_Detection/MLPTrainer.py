@@ -326,7 +326,14 @@ class MLPTrainer:
         """
         test_accuracies, snr_values = [], []
 
-        self.test_datasets = dict(sorted(self.test_datasets.items(), key=lambda x: float(x[0])))
+        def sort_key(item):
+            name = str(item[0])
+            try:
+                return (0, float(name))
+            except (TypeError, ValueError):
+                return (1, name)
+
+        self.test_datasets = dict(sorted(self.test_datasets.items(), key=sort_key))
         for snr_value, test_dataset in self.test_datasets.items():
             test_loader = DataLoader(test_dataset, batch_size=self.config.batch_size, shuffle=False)
             self._load_best_model()
