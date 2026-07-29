@@ -1,154 +1,77 @@
-import mne
-import pandas as pd
+import numpy as np
+
 from util import handle_logs
-from testing.helpers import *
 
-logger = handle_logs.get_logger("process_signal", "logs/app.log")
-def load_edf(path):
-    """
-    Load an EDF file and collect metadata describing its recording.
-    
-    Parameters:
-        path: Path to the EDF file.
-    
-    Returns:
-        A tuple containing the MNE raw recording and a DataFrame with the file path,
-        channel names, sampling frequency, sample count, and duration in seconds.
-    """
-    raw = mne.io.read_raw_edf(path, preload=False, verbose=False)
-    metadata = pd.DataFrame({
-        "path": path,
-        "channels": [raw.ch_names],
-        "sfreq": raw.info["sfreq"],
-        "n_samples": raw.n_times,
-        "duration_sec": raw.n_times / raw.info["sfreq"]
-    })
-    return raw, metadata
+logger = handle_logs.get_logger("epoching", "applog")
 
-def split_into_epochs(edf_path, epoch_duration=1):
+
+def segment_into_epochs(data: np.ndarray, fs: float, epoch_duration: float = 1.0, drop_last: bool = True):
     """
-    Load an EDF recording and divide it into consecutive fixed-duration epochs.
-    
+    Split a continuous (n_channels, n_samples) array into fixed-duration,
+    non-overlapping epochs.
+
     Parameters:
-        edf_path: Path to the EDF file.
-        epoch_duration: Duration of each epoch in seconds.
-    
+        data (np.ndarray): Signal array of shape (n_channels, n_samples),
+            already loaded/concatenated/resampled/bipolar-converted/
+            artifact-masked upstream.
+        fs (float): Sampling rate of `data`, in Hz.
+        epoch_duration (float): Epoch length in seconds. Default 1.0.
+        drop_last (bool): If True (default), discard a trailing partial
+            epoch that doesn't fill a full `epoch_duration` window. If
+            False, raise instead of silently dropping data.
+
     Returns:
-        epochs: MNE Epochs object containing the segmented recording.
+        np.ndarray of shape (n_epochs, n_channels, epoch_samples)
     """
-    raw = mne.io.read_raw_edf(str(edf_path), preload=True)
-    
-    events = mne.make_fixed_length_events(
-        raw, 
-        id=1,
-        duration=epoch_duration,
-        overlap=0  
+    if data.ndim != 2:
+        raise ValueError(f"Expected data of shape (n_channels, n_samples), got shape {data.shape}")
+    if fs <= 0:
+        raise ValueError(f"fs must be positive, got {fs}")
+    if epoch_duration <= 0:
+        raise ValueError(f"epoch_duration must be positive, got {epoch_duration}")
+
+    n_channels, n_samples = data.shape
+    epoch_samples = int(round(epoch_duration * fs))
+
+    if epoch_samples <= 0:
+        raise ValueError(
+            f"epoch_duration={epoch_duration} at fs={fs} rounds to {epoch_samples} samples/epoch"
+        )
+
+    n_epochs = n_samples // epoch_samples
+    remainder = n_samples - (n_epochs * epoch_samples)
+
+    if remainder and not drop_last:
+        raise ValueError(
+            f"{n_samples} samples not evenly divisible by epoch_samples={epoch_samples} "
+            f"(remainder={remainder}); pass drop_last=True to discard the trailing partial epoch"
+        )
+
+    if remainder:
+        logger.debug(f"Dropping trailing {remainder} samples ({remainder / fs:.3f}s) that don't fill a full epoch")
+
+    trimmed = data[:, : n_epochs * epoch_samples]
+    epochs = trimmed.reshape(n_channels, n_epochs, epoch_samples).transpose(1, 0, 2)
+
+    logger.info(
+        f"Segmented ({n_channels}, {n_samples}) @ {fs}Hz into "
+        f"{n_epochs} epochs of {epoch_duration}s ({epoch_samples} samples each)"
     )
-    
-    epochs = mne.Epochs(
-        raw,
-        events=events,
-        event_id=1,
-        tmin=0,
-        tmax=epoch_duration,
-        baseline=None,
-        preload=True,
-        verbose=False
-    )
+
     return epochs
-def standardize_channel_name(ch):
-    """
-    Standardize an EEG channel name for channel matching.
-    
-    Parameters:
-        ch (str): Channel name beginning with ``EEG``.
-    
-    Returns:
-        str or None: The channel name without the ``EEG`` prefix, ``-LE`` or
-        ``-REF`` suffixes, and spaces; ``None`` for names without the ``EEG``
-        prefix.
-    """
-    if not ch.startswith('EEG'):
-        return None
-    # Remove reference suffixes: -LE (linked ears), -REF (average reference)
-    new_name = ch.replace('EEG', '')
-    new_name = new_name.replace('-LE', '')
-    new_name = new_name.replace('-REF', '')
-    new_name = new_name.replace(" ", "")
-    return new_name
 
-def standardize_channels_names(raw, metadata):
-    """
-    Standardize EEG channel names and update the associated metadata.
-    
-    Parameters:
-        raw: Raw EEG data whose channel names should be standardized.
-        metadata: DataFrame containing the channel names in its first row.
-    
-    Returns:
-        tuple: The updated raw data and metadata.
-    """
-    channel_map = {}
 
-    eeg_channels = []
-    for ch in raw.ch_names:
-        new_name = standardize_channel_name(ch)
-        if new_name is not None and new_name in standard_channels:
-            channel_map[ch] = new_name
-            eeg_channels.append(ch)
+if __name__ == "__main__":
+    fs = 250
+    data = np.random.randn(17, fs * 10).astype(np.float64)  # 10 seconds, 17 channels
 
-    # This removes non electrode channels like 'PHOTIC PH'
-    raw.pick(eeg_channels) 
+    epochs = segment_into_epochs(data, fs, epoch_duration=1)
+    print(f"Input shape: {data.shape}")
+    print(f"Output shape: {epochs.shape}")
+    assert epochs.shape == (10, 17, fs)
 
-    old_metadata_channels = metadata['channels'].iloc[0]
-    new_metadata_channels = []
-    for ch in old_metadata_channels:
-        new_name = standardize_channel_name(ch)
-        if new_name is not None and new_name in standard_channels:
-            new_metadata_channels.append(new_name)
-
-    metadata['channels'].iloc[0] = new_metadata_channels
-    logger.info(f"standardized metadata channels {new_metadata_channels}")
-
-    raw.rename_channels(channel_map)
-    
-    return raw, metadata
-
-# These are the 19 standard channels that cover every major brain region
-standard_channels = [
-        'FP1', 'FP2', 'F7', 'F3', 'FZ', 'F4', 'F8',
-        'T3', 'C3', 'CZ', 'C4', 'T4',
-        'T5', 'P3', 'PZ', 'P4', 'T6',
-        'O1', 'O2'
-]
-
-def drop_channels(raw, metadata, desired_order=standard_channels):
-    """
-    Keep the raw signal channels in the requested set and order.
-    
-    Parameters:
-        raw: Raw signal data containing channel names.
-        metadata: DataFrame or mapping containing signal metadata.
-        desired_order: Channel names to retain and their required order.
-    
-    Returns:
-        The processed raw signal, or None if a requested channel is missing.
-    """
-
-    formatted_raw, _ = standardize_channels_names(raw, metadata)
-    raw_missing = [ch for ch in desired_order if ch not in formatted_raw.ch_names]
-    raw_extra = [ch for ch in formatted_raw.ch_names if ch not in desired_order]
-
-    if raw_missing:
-        filename = metadata['path'].iloc[0] if isinstance(metadata['path'], pd.Series) else metadata['path']
-        logger.warning(f'{filename} missing {len(raw_missing)} channels: {raw_missing}')
-        return None 
-    if raw_extra:
-        filename = metadata['path'].iloc[0] if isinstance(metadata['path'], pd.Series) else metadata['path']
-        logger.info(f'{filename} has {len(raw_extra)} extra channels: {raw_extra}')
-        metadata['channels'].iloc[0] = desired_order
-        raw.pick_channels(desired_order)
-    
-    raw.reorder_channels(desired_order)
-    return raw
-
+    # Uneven case
+    data2 = np.random.randn(17, fs * 10 + 37).astype(np.float64)
+    epochs2 = segment_into_epochs(data2, fs, epoch_duration=1)
+    assert epochs2.shape == (10, 17, fs)
+    print("Self-test passed.")
