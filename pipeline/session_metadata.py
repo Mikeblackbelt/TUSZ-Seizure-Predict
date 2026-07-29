@@ -123,11 +123,15 @@ def extract_session_metadata(session):
 
 #test
 
-""" from pipeline.session_metadata import extract_session_metadata
+from pipeline.session_metadata import extract_session_metadata
 
-sessions = index_sessions("dev")
-print(f"{len(sessions)} sessions found")
+def main():
+    sessions = index_sessions("dev")
+    print(f"{len(sessions)} sessions found")
 
-for session_key, session in sessions.items():
-    metadata = extract_session_metadata(session)
-    print(metadata) """
+    for session in sessions.items():
+        metadata = extract_session_metadata(session)
+        print(metadata)
+
+if __name__ == "__main__":
+    main()
