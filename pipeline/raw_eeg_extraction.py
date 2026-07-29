@@ -83,7 +83,7 @@ if __name__ == "__main__":
     from pipeline.raw_eeg_extraction import concatenate_session_eeg
     import time
 
-    sessions = index_sessions("dev")
+    sessions = index_sessions("train")
     session_keys = list(sessions.keys())[:10]
 
     for key in session_keys:
