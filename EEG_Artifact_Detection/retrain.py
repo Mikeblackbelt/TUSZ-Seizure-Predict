@@ -41,6 +41,7 @@ def main():
     parser.add_argument("--outputpath", default="output")
     parser.add_argument("--log-file", default="train_log.txt")
     parser.add_argument("--log-level", default="INFO")
+    parser.add_argument("--tmp-dir", default=None, help="Directory for temp build files (use a drive with space if building a large corpus)")
     args = parser.parse_args()
 
     build_tuar_dataset(
@@ -53,7 +54,8 @@ def main():
         args.test_frac,
         args.seed,
         args.max_windows,
-    ) #placeholder for now
+        args.tmp_dir
+    ) 
 
     if args.train:
         run_training(args.out_datapath, args)

@@ -358,60 +358,121 @@ def split_files_by_patient(files, val_frac, test_frac, seed):
     return train_files, val_files, test_files
 
 
-def build_split(files, fallback_fs, montage_dir, win_len, label_threshold, split_name, max_windows=2000):
+def build_split(files, fallback_fs, montage_dir, win_len, label_threshold, split_name, out_dir, max_windows=2000, seed=0, tmp_dir=None):
+    """Walk `files` (shuffled first, so results don't depend on find_all_files's sort
+    order) and accumulate windows up to a PER-CLASS cap, not a raw total cap. A flat
+    total cap lets whichever files are processed first exhaust the quota before rarer
+    classes (e.g. EOG, ~2% of all TUAR windows) ever show up -- this stops as soon as
+    every class hits its share of max_windows, or all files are exhausted.
+
+    out_dir: final destination directory for this split's X.npy/Y.npy. Written via
+    np.save on the accumulation memmap directly (streamed, not a full in-RAM copy) --
+    do not also call save_split on the result, this function writes the files itself.
+
+    tmp_dir: where the working memmap files are written while accumulating. Defaults
+    to the OS temp dir (tempfile.gettempdir()) if not given -- on Windows that's
+    usually %LOCALAPPDATA%\\Temp on the C: drive, which can silently fill up during a
+    large/unbounded build even if --out-datapath points somewhere else with plenty of
+    room. Pass a directory on a drive with real free space if you're building a large
+    corpus.
+
+    The whole accumulation + save is wrapped in one try/finally: a crash partway
+    through (disk full, Ctrl+C, anything) still removes the temp memmap files instead
+    of leaving multi-GB orphans behind in tmp_dir. Returns a small dict of counts/stats
+    only -- never the full window array -- to avoid ever holding a whole split in RAM.
+    """
     totals = {"direct": 0, "bipolar_derived": 0, "unmatched": 0}
-    n_windows = 0
     if max_windows is not None and max_windows < 0:
         max_windows = None
-    temp_dir = tempfile.mkdtemp(prefix=f"{split_name}_", dir=tempfile.gettempdir())
+    per_class_cap = None if max_windows is None else max(1, max_windows // 3)
+    class_counts = {CLASS_CLEAN: 0, CLASS_EOG: 0, CLASS_EMG: 0}
+    n_windows = 0
+
+    shuffled_files = list(files)
+    np.random.RandomState(seed).shuffle(shuffled_files)
+
+    tmp_root = tmp_dir or tempfile.gettempdir()
+    os.makedirs(tmp_root, exist_ok=True)
+    temp_dir = tempfile.mkdtemp(prefix=f"{split_name}_", dir=tmp_root)
     x_path = os.path.join(temp_dir, "X.dat")
     y_path = os.path.join(temp_dir, "Y.dat")
+    X_mem = None
+    y_mem = None
+    X_all = None
+    y_all = None
 
     try:
         X_mem = np.memmap(x_path, dtype=WINDOW_DTYPE, mode="w+", shape=(1, win_len))
         y_mem = np.memmap(y_path, dtype=np.int64, mode="w+", shape=(1,))
-    except Exception:
-        if os.path.exists(x_path):
-            os.remove(x_path)
-        if os.path.exists(y_path):
-            os.remove(y_path)
-        if os.path.exists(temp_dir):
-            os.rmdir(temp_dir)
-        raise
 
-    for i, path in enumerate(files, 1):
-        logger.info("[%s %d/%d] %s", split_name, i, len(files), path)
-        result = process_file(path, fallback_fs, montage_dir, win_len, label_threshold)
-        if result is None:
-            continue
-        X, y, match_stats = result
-        if X.size == 0:
-            continue
-        if max_windows is not None and n_windows >= max_windows:
-            break
-        remaining = None if max_windows is None else max_windows - n_windows
-        if remaining is not None and len(y) > remaining:
-            X = X[:remaining]
-            y = y[:remaining]
-        X_mem = np.memmap(x_path, dtype=WINDOW_DTYPE, mode="r+", shape=(n_windows + len(X), win_len))
-        y_mem = np.memmap(y_path, dtype=np.int64, mode="r+", shape=(n_windows + len(y),))
-        X_mem[n_windows:n_windows + len(X)] = X
-        y_mem[n_windows:n_windows + len(y)] = y
-        n_windows += len(y)
-        for k in totals:
-            totals[k] += match_stats[k]
+        for i, path in enumerate(shuffled_files, 1):
+            if per_class_cap is not None and all(class_counts[c] >= per_class_cap for c in class_counts):
+                logger.info("%s: every class reached its cap (%d each) after %d/%d files -- stopping early",
+                            split_name, per_class_cap, i - 1, len(shuffled_files))
+                break
+            logger.info("[%s %d/%d] %s", split_name, i, len(shuffled_files), path)
+            result = process_file(path, fallback_fs, montage_dir, win_len, label_threshold)
+            if result is None:
+                continue
+            X, y, match_stats = result
+            if X.size == 0:
+                continue
 
-    try:
+            if per_class_cap is not None:
+                keep_mask = np.zeros(len(y), dtype=bool)
+                for idx, label in enumerate(y):
+                    label = int(label)
+                    if class_counts[label] < per_class_cap:
+                        keep_mask[idx] = True
+                        class_counts[label] += 1
+                if not keep_mask.any():
+                    continue
+                X, y = X[keep_mask], y[keep_mask]
+            else:
+                for label in (CLASS_CLEAN, CLASS_EOG, CLASS_EMG):
+                    class_counts[label] += int((y == label).sum())
+
+            X_mem = np.memmap(x_path, dtype=WINDOW_DTYPE, mode="r+", shape=(n_windows + len(X), win_len))
+            y_mem = np.memmap(y_path, dtype=np.int64, mode="r+", shape=(n_windows + len(y),))
+            X_mem[n_windows:n_windows + len(X)] = X
+            y_mem[n_windows:n_windows + len(y)] = y
+            n_windows += len(y)
+            for k in totals:
+                totals[k] += match_stats[k]
+
         if n_windows == 0:
             logger.warning("%s split produced zero windows", split_name)
-            X_mem.flush()
-            y_mem.flush()
-            return np.empty((0, win_len)), np.empty((0,), dtype=np.int64), totals
+            return {"n_windows": 0, "counts": {CLASS_CLEAN: 0, CLASS_EOG: 0, CLASS_EMG: 0}, "totals": totals}
 
-        X_all = np.memmap(x_path, dtype=WINDOW_DTYPE, mode="r", shape=(n_windows, win_len))
-        y_all = np.memmap(y_path, dtype=np.int64, mode="r", shape=(n_windows,))
+        # Stream directly to the final .npy location via np.save on the memmap itself.
+        # np.save writes a memmap by reading through it (tofile-style, backed by the OS
+        # page cache) rather than requiring a second full-size allocation -- this avoids
+        # ever holding the whole split in RAM at once, which is what caused the earlier
+        # MemoryError from np.array(memmap). Only after this completes do we delete the
+        # temp files, in `finally` below.
+        os.makedirs(out_dir, exist_ok=True)
+        X_view = np.memmap(x_path, dtype=WINDOW_DTYPE, mode="r", shape=(n_windows, win_len))
+        y_view = np.memmap(y_path, dtype=np.int64, mode="r", shape=(n_windows,))
+        np.save(os.path.join(out_dir, "X.npy"), X_view)
+        np.save(os.path.join(out_dir, "Y.npy"), y_view)
 
-        counts = {c: int((y_all == c).sum()) for c in (CLASS_CLEAN, CLASS_EOG, CLASS_EMG)}
+        counts = {c: int((y_view == c).sum()) for c in (CLASS_CLEAN, CLASS_EOG, CLASS_EMG)}
+        logger.info(
+            "%s: %d windows -- clean=%d eog=%d emg=%d",
+            split_name, n_windows, counts[CLASS_CLEAN], counts[CLASS_EOG], counts[CLASS_EMG],
+        )
+        n_seen = totals["direct"] + totals["bipolar_derived"] + totals["unmatched"]
+        if n_seen:
+            logger.info(
+                "%s: channel match -- direct=%d bipolar_derived=%d unmatched=%d (rate=%.4f)",
+                split_name, totals["direct"], totals["bipolar_derived"], totals["unmatched"],
+                totals["unmatched"] / n_seen,
+            )
+        logger.info("Wrote %s (%d windows)", out_dir, n_windows)
+
+        del X_view, y_view
+        return {"n_windows": n_windows, "counts": counts, "totals": totals}
+
     finally:
         for mem in (X_mem, y_mem):
             if mem is not None:
@@ -419,40 +480,25 @@ def build_split(files, fallback_fs, montage_dir, win_len, label_threshold, split
                     mem.flush()
                 except Exception:
                     pass
-        for path in (x_path, y_path):
+        del X_mem, y_mem
+        for p in (x_path, y_path):
             try:
-                if os.path.exists(path):
-                    os.remove(path)
-            except Exception:
-                pass
+                if os.path.exists(p):
+                    os.remove(p)
+            except Exception as exc:
+                logger.warning("Could not remove temp file %s: %s", p, exc)
         try:
             if os.path.exists(temp_dir):
                 os.rmdir(temp_dir)
-        except Exception:
-            pass
-    logger.info(
-        "%s: %d windows -- clean=%d eog=%d emg=%d",
-        split_name,
-        len(y_all),
-        counts[CLASS_CLEAN],
-        counts[CLASS_EOG],
-        counts[CLASS_EMG],
-    )
-    n_seen = totals["direct"] + totals["bipolar_derived"] + totals["unmatched"]
-    if n_seen:
-        logger.info(
-            "%s: channel match -- direct=%d bipolar_derived=%d unmatched=%d (rate=%.4f)",
-            split_name,
-            totals["direct"],
-            totals["bipolar_derived"],
-            totals["unmatched"],
-            totals["unmatched"] / n_seen,
-        )
-
-    return X_all, y_all, totals
+        except Exception as exc:
+            logger.warning("Could not remove temp dir %s: %s", temp_dir, exc)
 
 
 def save_split(datapath, subdir, X, y):
+    """Standalone helper for saving an already-in-memory (X, y) pair -- NOT used by
+    build_tuar_dataset anymore, since build_split now streams its output directly to
+    out_dir to avoid ever materializing a whole split in RAM. Kept for other callers
+    that already have small enough arrays in hand."""
     out_dir = os.path.join(datapath, subdir)
     os.makedirs(out_dir, exist_ok=True)
     np.save(os.path.join(out_dir, "X.npy"), X)
@@ -460,7 +506,7 @@ def save_split(datapath, subdir, X, y):
     logger.info("Wrote %s (%d windows)", out_dir, len(y))
 
 
-def build_tuar_dataset(tuar_path, out_datapath, fallback_fs, montage_dir, label_threshold, val_frac, test_frac, seed, max_windows=2000):
+def build_tuar_dataset(tuar_path, out_datapath, fallback_fs, montage_dir, label_threshold, val_frac, test_frac, seed, max_windows=2000, tmp_dir=None):
     files = find_all_files(tuar_path)
     logger.info("Found %d file(s) under %s", len(files), tuar_path)
 
@@ -473,20 +519,19 @@ def build_tuar_dataset(tuar_path, out_datapath, fallback_fs, montage_dir, label_
     )
 
     win_len = int(round(WINDOW_SEC * TARGET_FS))
-    X_train, y_train, _ = build_split(train_files, fallback_fs, montage_dir, win_len, label_threshold, "train", max_windows=max_windows)
-    X_val, y_val, _ = build_split(val_files, fallback_fs, montage_dir, win_len, label_threshold, "val", max_windows=max_windows)
-    X_test, y_test, _ = build_split(test_files, fallback_fs, montage_dir, win_len, label_threshold, "test", max_windows=max_windows)
-
-    save_split(out_datapath, "train", X_train, y_train)
-    save_split(out_datapath, "val", X_val, y_val)
-    save_split(out_datapath, os.path.join("test", "0"), X_test, y_test)
+    train_stats = build_split(train_files, fallback_fs, montage_dir, win_len, label_threshold, "train",
+                               out_dir=os.path.join(out_datapath, "train"), max_windows=max_windows, seed=seed, tmp_dir=tmp_dir)
+    val_stats = build_split(val_files, fallback_fs, montage_dir, win_len, label_threshold, "val",
+                             out_dir=os.path.join(out_datapath, "val"), max_windows=max_windows, seed=seed, tmp_dir=tmp_dir)
+    test_stats = build_split(test_files, fallback_fs, montage_dir, win_len, label_threshold, "test",
+                              out_dir=os.path.join(out_datapath, "test", "0"), max_windows=max_windows, seed=seed, tmp_dir=tmp_dir)
 
     return {
         "files": files,
         "train_files": train_files,
         "val_files": val_files,
         "test_files": test_files,
-        "train_counts": len(y_train),
-        "val_counts": len(y_val),
-        "test_counts": len(y_test),
+        "train_counts": train_stats["n_windows"],
+        "val_counts": val_stats["n_windows"],
+        "test_counts": test_stats["n_windows"],
     }
