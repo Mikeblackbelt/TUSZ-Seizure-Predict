@@ -1,8 +1,10 @@
 import os
+import time
 import datetime
 import logging
 import pickle
 from pathlib import Path
+from contextlib import contextmanager
 import termcolor
 import torch
 import torch.optim as optim
@@ -12,7 +14,7 @@ import matplotlib.pyplot as plt
 from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-from sklearn.decomposition import PCA, FastICA
+from sklearn.decomposition import PCA, IncrementalPCA, FastICA
 from sklearn.preprocessing import StandardScaler
 from models import ArtifactDetectionNN,ArtifactDetectionCNN,ConvNet
 from dataset import EEGDataset
@@ -26,6 +28,27 @@ run_datetime = datetime.datetime.now()
 plt.rcParams.update({'font.size': 14})
 
 
+def _fmt_secs(seconds):
+    """Format a duration in seconds as H:MM:SS (or M:SS if under an hour)."""
+    seconds = int(seconds)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}h {m:02d}m {s:02d}s"
+    return f"{m}m {s:02d}s"
+
+
+def _iter_chunks(n_rows, chunk_size):
+    """
+    Yield (start, end) index pairs covering ``n_rows`` in steps of ``chunk_size``.
+
+    Used to fit/transform large feature arrays (e.g. 7e7 EEG windows) in bounded-memory
+    pieces instead of requiring the whole array to be duplicated in memory at once.
+    """
+    for start in range(0, n_rows, chunk_size):
+        yield start, min(start + chunk_size, n_rows)
+
+
 class MLPTrainer:
     def __init__(self, config):
         """
@@ -35,6 +58,10 @@ class MLPTrainer:
         	config: Configuration containing dataset paths, model settings, preprocessing options, and training parameters.
         """
         self.config = config
+        # Rows processed per chunk during scaling/PCA fit+transform, so a 7e7-window
+        # dataset never needs a second full-size copy in memory at once. Override via
+        # config.preprocess_chunk_size if needed.
+        self.chunk_size = getattr(config, 'preprocess_chunk_size', 500_000)
         self.device = self._setup_device()
         self._setup_directories()
         self._setup_logging()
@@ -44,6 +71,34 @@ class MLPTrainer:
         self._init_model()
         self._init_training_components()
         self._init_metrics()
+        self._epoch_durations = []
+
+    # ------------------------------------------------------------------ #
+    # Logging helpers
+    # ------------------------------------------------------------------ #
+
+    @contextmanager
+    def _log_step(self, name, extra=""):
+        """
+        Log the start and end of a long-running step (preprocessing, model loading, etc.)
+        along with its wall-clock duration, so slow steps are visible in the logs/console
+        instead of appearing to hang.
+
+        Parameters:
+            name (str): Short human-readable name of the step (e.g. 'Fitting StandardScaler').
+            extra (str): Optional extra context to include in the start log line (e.g. shape).
+        """
+        start_msg = f"[START] {name}" + (f" ({extra})" if extra else "")
+        logging.info(start_msg)
+        print(termcolor.colored(start_msg, 'yellow'))
+        t0 = time.time()
+        try:
+            yield
+        finally:
+            elapsed = time.time() - t0
+            end_msg = f"[DONE]  {name} — took {_fmt_secs(elapsed)}"
+            logging.info(end_msg)
+            print(termcolor.colored(end_msg, 'yellow'))
 
     def _setup_device(self):
         """
@@ -67,18 +122,33 @@ class MLPTrainer:
     def _setup_logging(self):
         """Configure application logging using the configured log file and log level."""
         setup_logging(self.config.log_file, self.config.log_level)
+        logging.info(f"=== Run started {run_datetime.isoformat(timespec='seconds')} ===")
+        logging.info(f"Config: mode={self.config.mode}, model={self.config.model}, "
+                     f"epochs={self.config.num_epochs}, batch_size={self.config.batch_size}, "
+                     f"pca={self.config.pca}, ica={self.config.ica}")
 
     def _init_data_combiner(self):
         """Initialize the data noise combiner using the trainer configuration."""
-        DataNoiseCombiner(self.config)
+        with self._log_step("Combining/generating noised data"):
+            DataNoiseCombiner(self.config)
 
     def _load_datasets(self):
         """
         Load the training, validation, and SNR-specific test datasets from the configured data directory.
         """
-        self.train_dataset = EEGDataset(Path(self.config.datapath) / "train")
-        self.val_dataset = EEGDataset(Path(self.config.datapath) / "val")
-        self.test_datasets = self._load_test_datasets(Path(self.config.datapath) / "test")
+        with self._log_step("Loading train dataset"):
+            self.train_dataset = EEGDataset(Path(self.config.datapath) / "train")
+        logging.info(f"Train dataset: {len(self.train_dataset):,} windows")
+
+        with self._log_step("Loading validation dataset"):
+            self.val_dataset = EEGDataset(Path(self.config.datapath) / "val")
+        logging.info(f"Validation dataset: {len(self.val_dataset):,} windows")
+
+        with self._log_step("Loading test datasets (all SNRs)"):
+            self.test_datasets = self._load_test_datasets(Path(self.config.datapath) / "test")
+        total_test = sum(len(d) for d in self.test_datasets.values())
+        logging.info(f"Test datasets: {len(self.test_datasets)} SNR levels, "
+                     f"{total_test:,} windows total")
 
     def _load_test_datasets(self, test_dir):
         """
@@ -91,10 +161,11 @@ class MLPTrainer:
         	dict: Mapping of SNR strings to their corresponding EEG datasets.
         """
         test_datasets = {}
-        for snr_dir in test_dir.iterdir():
-            if snr_dir.is_dir():
-                snr_value = snr_dir.name.split(' ')[-1]
-                test_datasets[snr_value] = EEGDataset(snr_dir)
+        snr_dirs = [d for d in test_dir.iterdir() if d.is_dir()]
+        for snr_dir in tqdm(snr_dirs, desc="Loading test SNR folders", unit="snr"):
+            snr_value = snr_dir.name.split(' ')[-1]
+            test_datasets[snr_value] = EEGDataset(snr_dir)
+            logging.info(f"  SNR {snr_value}: {len(test_datasets[snr_value]):,} windows")
         return test_datasets
 
     def _setup_preprocessing(self):
@@ -107,12 +178,15 @@ class MLPTrainer:
         """Initialize the configured artifact-detection model on the selected device."""
         feature_size = next(iter(self.test_datasets.values())).features.shape[1]
         print(f'Feature shape: {feature_size}')
+        logging.info(f"Feature size: {feature_size}")
         if self.config.model == 'MLP':
             self.model = ArtifactDetectionNN(feature_size).to(self.device)
         elif self.config.model == 'CNN':
             self.model = ArtifactDetectionCNN(feature_size).to(self.device)
         elif self.config.model == 'SincNet':
             self.model = ConvNet(sr=256,min_band_hz=1,kernel_mult=3.903).to(self.device)
+        n_params = sum(p.numel() for p in self.model.parameters())
+        logging.info(f"Model: {self.config.model}, {n_params:,} parameters")
 
     def _init_training_components(self):
         """Initialize the loss function, optimizer, early-stopping handler, and training data loaders."""
@@ -120,6 +194,8 @@ class MLPTrainer:
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.config.learning_rate)
         self.early_stopping = EarlyStopping(patience=20, min_delta=0)
         self.train_loader, self.val_loader = self._split_dataset()
+        logging.info(f"Train batches/epoch: {len(self.train_loader):,}, "
+                     f"Val batches/epoch: {len(self.val_loader):,}")
 
     def _init_metrics(self):
         """
@@ -137,14 +213,30 @@ class MLPTrainer:
         
         Standard scaling is always applied. PCA is additionally applied when enabled in the
         configuration, retaining the configured preprocessing state for later evaluation.
+
+        Both fit and transform are done in chunks of ``self.chunk_size`` rows so that, for
+        large datasets (tens of millions of windows), only one chunk plus the output array
+        needs to be resident in memory at a time instead of several full-size copies.
         """
-        self.train_dataset.features, scaler = self._scale_data(self.train_dataset.features)
+        n_windows, n_features = self.train_dataset.features.shape
+        logging.info(f"Preprocessing {n_windows:,} training windows x {n_features} features "
+                     f"(chunk size {self.chunk_size:,})")
+
+        with self._log_step("Fitting + applying StandardScaler", extra=f"{n_windows:,} windows"):
+            self.train_dataset.features, scaler = self._scale_data(self.train_dataset.features)
         self._save_preprocessor(scaler, 'scaler.pkl')
-        self.val_dataset.features = scaler.transform(self.val_dataset.features)
+
+        with self._log_step("Scaling validation set", extra=f"{len(self.val_dataset):,} windows"):
+            self.val_dataset.features = self._transform_in_chunks(scaler, self.val_dataset.features)
+
         if self.config.pca:
-            self.train_dataset.features, pca = self._apply_pca(self.train_dataset.features)
+            with self._log_step("Fitting + applying IncrementalPCA (95% variance)",
+                                 extra=f"{n_windows:,} windows"):
+                self.train_dataset.features, pca = self._apply_pca(self.train_dataset.features)
+            logging.info(f"PCA reduced features {n_features} -> {pca.n_components_}")
             self._save_preprocessor(pca, 'pca.pkl')
-            self.val_dataset.features = pca.transform(self.val_dataset.features)
+            with self._log_step("Applying PCA to validation set"):
+                self.val_dataset.features = self._transform_in_chunks(pca, self.val_dataset.features)
         # if self.config.ica:
         #     self.train_dataset.features, ica = self._apply_ica(self.train_dataset.features)
         #     self._save_preprocessor(ica, 'ica.pkl')
@@ -153,17 +245,48 @@ class MLPTrainer:
 
     def _scale_data(self, features):
         """
-        Scale feature data with a standard scaler.
-        
+        Fit a StandardScaler and transform features in bounded-memory chunks.
+
+        The scaler's running mean/variance are accumulated chunk-by-chunk via
+        ``partial_fit`` (mathematically equivalent to fitting on the full array at once),
+        then each chunk is transformed and written directly into a preallocated output
+        array so the raw and scaled data are never both fully duplicated in memory.
+
         Parameters:
             features: Feature data to scale.
-        
+
         Returns:
             tuple: The scaled feature data and the fitted standard scaler.
         """
+        n_rows = features.shape[0]
         scaler = StandardScaler()
-        scaled_features = scaler.fit_transform(features)
+
+        for start, end in tqdm(list(_iter_chunks(n_rows, self.chunk_size)),
+                                desc="Fitting StandardScaler", unit="chunk"):
+            scaler.partial_fit(features[start:end])
+
+        scaled_features = self._transform_in_chunks(scaler, features)
         return scaled_features, scaler
+
+    def _transform_in_chunks(self, transformer, features):
+        """
+        Apply an already-fitted transformer's ``.transform`` chunk-by-chunk.
+
+        Parameters:
+            transformer: A fitted StandardScaler, PCA, or IncrementalPCA instance.
+            features: Feature array to transform.
+
+        Returns:
+            np.ndarray: The transformed features, assembled from per-chunk results.
+        """
+        n_rows = features.shape[0]
+        out_dim = getattr(transformer, 'n_components_', features.shape[1])
+        out = np.empty((n_rows, out_dim), dtype=np.float32)
+
+        for start, end in tqdm(list(_iter_chunks(n_rows, self.chunk_size)),
+                                desc=f"Applying {type(transformer).__name__}", unit="chunk"):
+            out[start:end] = transformer.transform(features[start:end])
+        return out
 
     # def _apply_ica(self, features):
     #     ica = FastICA(n_components=80, random_state=10)
@@ -172,17 +295,63 @@ class MLPTrainer:
 
     def _apply_pca(self, features):
         """
-        Fit PCA to the features while retaining 95% of the variance.
-        
+        Fit an IncrementalPCA to the features, retaining ~95% of the variance, using
+        bounded-memory chunked passes instead of a single full-array ``fit_transform``.
+
+        IncrementalPCA requires a fixed integer component count up front (unlike
+        ``PCA(n_components=0.95)``), so the target count is first estimated by fitting a
+        regular PCA on a subsample, then IncrementalPCA is fit/applied over the full
+        dataset in chunks.
+
         Parameters:
             features: The feature data to transform.
-        
+
         Returns:
-            tuple: The transformed features and fitted PCA transformer.
+            tuple: The transformed features and fitted IncrementalPCA transformer.
         """
-        pca = PCA(n_components=0.95)
-        pca_features = pca.fit_transform(features)
+        n_rows, n_features = features.shape
+        n_components = self._estimate_pca_components(features, target_variance=0.95)
+
+        pca = IncrementalPCA(n_components=n_components, batch_size=self.chunk_size)
+        for start, end in tqdm(list(_iter_chunks(n_rows, self.chunk_size)),
+                                desc="Fitting IncrementalPCA", unit="chunk"):
+            chunk = features[start:end]
+            # IncrementalPCA requires each partial_fit batch to have at least
+            # n_components rows; skip a too-small trailing remainder (negligible
+            # impact on the running fit given the size of the full dataset).
+            if chunk.shape[0] >= n_components:
+                pca.partial_fit(chunk)
+
+        pca_features = self._transform_in_chunks(pca, features)
         return pca_features, pca
+
+    def _estimate_pca_components(self, features, target_variance=0.95, max_sample=200_000):
+        """
+        Estimate how many principal components are needed to reach a target explained
+        variance ratio, using a random subsample so the estimate itself stays cheap on
+        very large datasets.
+
+        Parameters:
+            features: Full feature array to sample from.
+            target_variance (float): Desired cumulative explained variance ratio.
+            max_sample (int): Maximum number of rows to use for the estimate.
+
+        Returns:
+            int: Number of components needed to reach ``target_variance``.
+        """
+        n_rows = features.shape[0]
+        sample_size = min(max_sample, n_rows)
+        with self._log_step(f"Estimating PCA components for {target_variance:.0%} variance",
+                             extra=f"sampling {sample_size:,} of {n_rows:,} windows"):
+            rng = np.random.default_rng(seed=0)
+            idx = rng.choice(n_rows, size=sample_size, replace=False)
+            idx.sort()  # sorted indexing is faster/safer for most array-like backends
+            sample_pca = PCA(n_components=target_variance)
+            sample_pca.fit(features[idx])
+            n_components = sample_pca.n_components_
+        logging.info(f"Estimated {n_components} components reach {target_variance:.0%} variance "
+                     f"(from a {sample_size:,}-window sample)")
+        return n_components
 
     def _save_preprocessor(self, preprocessor, filename):
         """
@@ -194,6 +363,7 @@ class MLPTrainer:
         """
         with open(os.path.join(self.config.save_path, filename), 'wb') as f:
             pickle.dump(preprocessor, f)
+        logging.info(f"Saved preprocessor: {filename}")
 
     def _load_preprocessing(self):
         """
@@ -201,15 +371,18 @@ class MLPTrainer:
         
         The scaler is always applied. PCA and ICA transformations are applied when enabled in the configuration.
         """
-        for snr, test_dataset in self.test_datasets.items():
+        for snr, test_dataset in tqdm(self.test_datasets.items(), desc="Preprocessing test SNRs", unit="snr"):
+            t0 = time.time()
             scaler = self._load_preprocessor('scaler.pkl')
-            test_dataset.features = scaler.transform(test_dataset.features)
+            test_dataset.features = self._transform_in_chunks(scaler, test_dataset.features)
             if self.config.pca:
                 pca = self._load_preprocessor('pca.pkl')
-                test_dataset.features = pca.transform(test_dataset.features)
+                test_dataset.features = self._transform_in_chunks(pca, test_dataset.features)
             if self.config.ica:
                 ica = self._load_preprocessor('ica.pkl')
                 test_dataset.features = ica.transform(test_dataset.features)
+            logging.info(f"  SNR {snr}: preprocessed {len(test_dataset):,} windows "
+                         f"in {_fmt_secs(time.time() - t0)}")
 
 
     def _load_preprocessor(self, filename):
@@ -245,8 +418,12 @@ class MLPTrainer:
         """
         self.model.train()
         running_loss, all_labels, all_preds = 0.0, [], []
+        n_seen = 0
+        t0 = time.time()
 
-        for batch_features, batch_labels in self.train_loader:
+        pbar = tqdm(self.train_loader, desc=f"Epoch {epoch + 1}/{self.config.num_epochs} [train]",
+                    unit="batch", leave=False)
+        for batch_features, batch_labels in pbar:
             batch_features, batch_labels = batch_features.to(self.device), batch_labels.to(self.device)
             self.optimizer.zero_grad()
             outputs = self.model(batch_features.float())
@@ -254,11 +431,17 @@ class MLPTrainer:
             loss.backward()
             self.optimizer.step()
             running_loss += loss.item()
+            n_seen += batch_labels.size(0)
             all_labels.extend(batch_labels.cpu().numpy())
             _, preds = torch.max(outputs, 1)
             all_preds.extend(preds.cpu().numpy())
 
-        self._log_epoch_metrics(epoch, running_loss, all_labels, all_preds, 'Training')
+            elapsed = time.time() - t0
+            windows_per_sec = n_seen / elapsed if elapsed > 0 else 0.0
+            pbar.set_postfix(loss=f"{loss.item():.4f}", win_s=f"{windows_per_sec:,.0f}/s")
+
+        self._log_epoch_metrics(epoch, running_loss, all_labels, all_preds, 'Training',
+                                 duration=time.time() - t0)
 
     def validate_one_epoch(self, epoch):
         """
@@ -269,9 +452,12 @@ class MLPTrainer:
         """
         self.model.eval()
         val_loss, all_val_labels, all_val_preds = 0.0, [], []
+        t0 = time.time()
 
+        pbar = tqdm(self.val_loader, desc=f"Epoch {epoch + 1}/{self.config.num_epochs} [val]",
+                    unit="batch", leave=False)
         with torch.no_grad():
-            for val_features, val_labels in self.val_loader:
+            for val_features, val_labels in pbar:
                 val_features, val_labels = val_features.to(self.device), val_labels.to(self.device)
                 val_outputs = self.model(val_features.float())
                 loss = self.criterion(val_outputs, val_labels.long())
@@ -279,14 +465,19 @@ class MLPTrainer:
                 all_val_labels.extend(val_labels.cpu().numpy())
                 _, val_preds = torch.max(val_outputs, 1)
                 all_val_preds.extend(val_preds.cpu().numpy())
+                pbar.set_postfix(loss=f"{loss.item():.4f}")
 
-        self._log_epoch_metrics(epoch, val_loss, all_val_labels, all_val_preds, 'Validation')
+        self._log_epoch_metrics(epoch, val_loss, all_val_labels, all_val_preds, 'Validation',
+                                 duration=time.time() - t0)
 
         if val_loss < self.best_val_loss:
+            improvement = self.best_val_loss - val_loss if self.best_val_loss != float('inf') else 0.0
             self.best_val_loss = val_loss
             self._save_checkpoint()
+            if improvement:
+                logging.info(f"  New best val loss (improved by {improvement:.4f})")
 
-    def _log_epoch_metrics(self, epoch, running_loss, all_labels, all_preds, phase):
+    def _log_epoch_metrics(self, epoch, running_loss, all_labels, all_preds, phase, duration=None):
         """
         Record and display loss and classification metrics for a training or validation epoch.
         
@@ -296,11 +487,14 @@ class MLPTrainer:
         	all_labels (array-like): True class labels for the epoch.
         	all_preds (array-like): Predicted class labels for the epoch.
         	phase (str): Epoch phase, either ``'Training'`` or ``'Validation'``.
+        	duration (float): Optional wall-clock seconds this phase took, appended to the log line.
         """
         avg_loss = running_loss / len(self.train_loader if phase == 'Training' else self.val_loader)
         acc, f1, precision, recall = calculate_metrics(all_labels, all_preds)
+        duration_str = f", Time: {_fmt_secs(duration)}" if duration is not None else ""
         metrics_log = (f"[{phase}] Epoch {epoch + 1}/{self.config.num_epochs}, Loss: {avg_loss:.4f}, "
-                       f"Accuracy: {acc:.4f}, F1: {f1:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}")
+                       f"Accuracy: {acc:.4f}, F1: {f1:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}"
+                       f"{duration_str}")
         logging.info(metrics_log)
         print(termcolor.colored(metrics_log, 'green' if phase == 'Training' else 'blue'))
 
@@ -334,10 +528,12 @@ class MLPTrainer:
                 return (1, name)
 
         self.test_datasets = dict(sorted(self.test_datasets.items(), key=sort_key))
-        for snr_value, test_dataset in self.test_datasets.items():
-            test_loader = DataLoader(test_dataset, batch_size=self.config.batch_size, shuffle=False)
-            self._load_best_model()
-            self._evaluate_test_set(test_loader, snr_value, test_accuracies, snr_values)
+        self._load_best_model()
+
+        with self._log_step(f"Testing across {len(self.test_datasets)} SNR levels"):
+            for snr_value, test_dataset in tqdm(self.test_datasets.items(), desc="Testing SNRs", unit="snr"):
+                test_loader = DataLoader(test_dataset, batch_size=self.config.batch_size, shuffle=False)
+                self._evaluate_test_set(test_loader, snr_value, test_accuracies, snr_values)
 
         self._plot_test_results(snr_values, test_accuracies)
 
@@ -352,8 +548,9 @@ class MLPTrainer:
         torch.serialization.add_safe_globals([ArtifactDetectionNN])
         
         model_path = os.path.join(self.config.save_path, 'best_model.pth')
-        self.model = torch.load(model_path, weights_only=False)
-        self.model.to(self.device)
+        with self._log_step("Loading best model checkpoint"):
+            self.model = torch.load(model_path, weights_only=False)
+            self.model.to(self.device)
         print(f"[INFO] Successfully loaded best model from {model_path}")
 
     def _evaluate_test_set(self, test_loader, snr_value, test_accuracies, snr_values):
@@ -369,6 +566,7 @@ class MLPTrainer:
         self.model.eval()
         test_loss, correct, total = 0.0, 0, 0
         all_test_labels, all_test_preds = [], []
+        t0 = time.time()
 
         with torch.no_grad():
             for test_features, test_labels in test_loader:
@@ -382,11 +580,13 @@ class MLPTrainer:
                 total += test_labels.size(0)
                 correct += (test_preds == test_labels).sum().item()
 
-        self._log_test_metrics(test_loader, test_loss, snr_value, all_test_labels, all_test_preds, test_accuracies, snr_values)
+        self._log_test_metrics(test_loader, test_loss, snr_value, all_test_labels, all_test_preds,
+                                test_accuracies, snr_values, duration=time.time() - t0)
         self._plot_confusion_matrix(all_test_labels, all_test_preds, snr_value)
 
 
-    def _log_test_metrics(self, test_loader, test_loss, snr_value, all_test_labels, all_test_preds, test_accuracies, snr_values):
+    def _log_test_metrics(self, test_loader, test_loss, snr_value, all_test_labels, all_test_preds,
+                           test_accuracies, snr_values, duration=None):
         """
         Record classification metrics for a test dataset and save the results for its SNR value.
         
@@ -398,13 +598,16 @@ class MLPTrainer:
         	all_test_preds: The predicted class labels.
         	test_accuracies: List to which the test accuracy is appended.
         	snr_values: List to which the SNR value is appended.
+        	duration (float): Optional wall-clock seconds this evaluation took.
         """
         test_acc, test_f1, test_precision, test_recall = calculate_metrics(all_test_labels, all_test_preds)
         test_accuracies.append(test_acc)
         snr_values.append(snr_value)
         avg_test_loss = test_loss / len(test_loader)
+        duration_str = f", Time: {_fmt_secs(duration)}" if duration is not None else ""
         metrics_log = (f"[Test] SNR: {snr_value}, Loss: {avg_test_loss:.4f}, Accuracy: {test_acc:.4f}, "
-                       f"F1: {test_f1:.4f}, Precision: {test_precision:.4f}, Recall: {test_recall:.4f}")
+                       f"F1: {test_f1:.4f}, Precision: {test_precision:.4f}, Recall: {test_recall:.4f}"
+                       f"{duration_str}")
         logging.info(metrics_log)
         print(metrics_log)
         self._save_test_results(snr_value, test_acc, test_f1, test_precision, test_recall)
@@ -426,6 +629,7 @@ class MLPTrainer:
         plt.ylabel('Actual')
         plt.title(f'Confusion Matrix, SNR: {snr}dB')
         plt.savefig(os.path.join(Path(self.config.outputpath) / Path('cnf_matrices'), f'confusion_matrix_{snr}.png'))
+        plt.close()
 
     def _save_test_results(self, snr_value, test_acc, test_f1, test_precision, test_recall):
         """
@@ -491,19 +695,39 @@ class MLPTrainer:
         
         Training mode runs training, generates training metrics plots, and evaluates the test datasets. Test mode evaluates the test datasets using the saved model.
         """
+        run_t0 = time.time()
         if self.config.mode == 'train':
             self._train()
             self.plot_metrics()
             self.test()
         elif self.config.mode == 'test':
             self.test()
+        logging.info(f"=== Run finished in {_fmt_secs(time.time() - run_t0)} ===")
 
     def _train(self):
         """Run the training loop for the configured number of epochs, stopping early when validation loss no longer improves."""
-        for epoch in tqdm(range(self.config.num_epochs)):
+        train_t0 = time.time()
+        for epoch in range(self.config.num_epochs):
+            epoch_t0 = time.time()
+
             self.train_one_epoch(epoch)
             self.validate_one_epoch(epoch)
+
+            epoch_duration = time.time() - epoch_t0
+            self._epoch_durations.append(epoch_duration)
+            avg_epoch_time = sum(self._epoch_durations) / len(self._epoch_durations)
+            remaining_epochs = self.config.num_epochs - (epoch + 1)
+            eta = avg_epoch_time * remaining_epochs
+            logging.info(f"Epoch {epoch + 1}/{self.config.num_epochs} complete in "
+                         f"{_fmt_secs(epoch_duration)} (avg {_fmt_secs(avg_epoch_time)}/epoch, "
+                         f"ETA {_fmt_secs(eta)})")
+            print(termcolor.colored(
+                f"--- Epoch {epoch + 1}/{self.config.num_epochs} done in {_fmt_secs(epoch_duration)} "
+                f"| ETA {_fmt_secs(eta)} ---", 'cyan'))
+
             if self.early_stopping(self.val_losses[-1]):
-                logging.info("Early stopping")
+                logging.info(f"Early stopping at epoch {epoch + 1}")
                 print("Early stopping")
                 break
+
+        logging.info(f"Training loop total time: {_fmt_secs(time.time() - train_t0)}")
