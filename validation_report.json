@@ -1,0 +1,1320 @@
+{
+  "n_files_tested": 100,
+  "matrix": [
+    [
+      329459,
+      43874421
+    ],
+    [
+      15498076,
+      674851888
+    ]
+  ],
+  "channel_match_totals": {
+    "direct": 23,
+    "bipolar_derived": 559,
+    "unmatched": 2
+  },
+  "per_file": [
+    {
+      "path": "C:\\Users\\peppe\\Tuh-Preprocess\\tuh_eeg_artifact_v3.0.1\\edf\\02_tcp_le\\aaaaajqo_s008_t001.edf",
+      "source": "artifact",
+      "tp": 81963,
+      "fp": 1746537,
+      "fn": 1988116,
+      "tn": 12876884,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 21,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "C:\\Users\\peppe\\Tuh-Preprocess\\tuh_eeg_artifact_v3.0.1\\edf\\01_tcp_ar\\aaaaalxk_s001_t000.edf",
+      "source": "artifact",
+      "tp": 13582,
+      "fp": 483918,
+      "fn": 344971,
+      "tn": 19634779,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 21,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "C:\\Users\\peppe\\Tuh-Preprocess\\tuh_eeg_artifact_v3.0.1\\edf\\02_tcp_le\\aaaaaltw_s001_t001.edf",
+      "source": "artifact",
+      "tp": 6500,
+      "fp": 2246000,
+      "fn": 144216,
+      "tn": 17350284,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 21,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "C:\\Users\\peppe\\Tuh-Preprocess\\tuh_eeg_artifact_v3.0.1\\edf\\01_tcp_ar\\aaaaanyb_s001_t001.edf",
+      "source": "artifact",
+      "tp": 24728,
+      "fp": 1328272,
+      "fn": 725342,
+      "tn": 36921658,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 21,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaalwv\\s004_2011\\03_tcp_ar_a\\aaaaalwv_s004_t003.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 185600,
+      "fn": 0,
+      "tn": 10810000,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaadmi\\s009_2015\\01_tcp_ar\\aaaaadmi_s009_t004.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 136192,
+      "fn": 0,
+      "tn": 2167808,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaaoek\\s031_2013\\01_tcp_ar\\aaaaaoek_s031_t007.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 2048,
+      "fn": 0,
+      "tn": 76288,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaaint\\s001_2009\\02_tcp_le\\aaaaaint_s001_t000.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 8500,
+      "fn": 0,
+      "tn": 16063750,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 21,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\v3.0.1\\edf\\01_tcp_ar\\aaaaaoby_s001_t000.edf",
+      "source": "seizure",
+      "tp": 13011,
+      "fp": 657197,
+      "fn": 647217,
+      "tn": 16437455,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 21,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaaoek\\s016_2013\\01_tcp_ar\\aaaaaoek_s016_t003.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 2560,
+      "fn": 0,
+      "tn": 9674240,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaajat\\s006_2010\\03_tcp_ar_a\\aaaaajat_s006_t006.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 6400,
+      "fn": 0,
+      "tn": 12953600,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaaqyo\\s004_2014\\01_tcp_ar\\aaaaaqyo_s004_t024.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 75776,
+      "fn": 0,
+      "tn": 6057472,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaartn\\s007_2014\\03_tcp_ar_a\\aaaaartn_s007_t019.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 1928192,
+      "fn": 0,
+      "tn": 4863488,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaanjw\\s001_2012\\01_tcp_ar\\aaaaanjw_s001_t000.edf",
+      "source": "seizure",
+      "tp": 20014,
+      "fp": 1500986,
+      "fn": 203418,
+      "tn": 12491832,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 21,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaagbf\\s009_2016\\01_tcp_ar\\aaaaagbf_s009_t018.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 8704,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\eval\\aaaaarpv\\s002_2014\\01_tcp_ar\\aaaaarpv_s002_t000.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 20992,
+      "fn": 735689,
+      "tn": 10783799,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 7,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaahie\\s027_2016\\01_tcp_ar\\aaaaahie_s027_t013.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 384000,
+      "fn": 0,
+      "tn": 2235904,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaaeqy\\s001_2006\\02_tcp_le\\aaaaaeqy_s001_t000.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 3654500,
+      "fn": 0,
+      "tn": 9633500,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 3,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaaptf\\s008_2013\\01_tcp_ar\\aaaaaptf_s008_t000.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 4781056,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaalzo\\s002_2011\\01_tcp_ar\\aaaaalzo_s002_t000.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 2217472,
+      "fn": 0,
+      "tn": 8050688,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\eval\\aaaaaqek\\s007_2015\\01_tcp_ar\\aaaaaqek_s007_t008.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 215040,
+      "fn": 0,
+      "tn": 2319360,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaaosa\\s008_2014\\01_tcp_ar\\aaaaaosa_s008_t002.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 248064,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 21,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaaimu\\s005_2014\\01_tcp_ar\\aaaaaimu_s005_t010.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 471040,
+      "fn": 0,
+      "tn": 9205760,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaagbf\\s010_2016\\01_tcp_ar\\aaaaagbf_s010_t006.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 2696960,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 2,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaamhj\\s002_2011\\01_tcp_ar\\aaaaamhj_s002_t003.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 2775000,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaanrb\\s002_2012\\01_tcp_ar\\aaaaanrb_s002_t000.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 349500,
+      "fn": 0,
+      "tn": 11879000,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaatem\\s001_2015\\01_tcp_ar\\aaaaatem_s001_t000.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 8704,
+      "fn": 0,
+      "tn": 9668096,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\eval\\aaaaasoc\\s005_2015\\01_tcp_ar\\aaaaasoc_s005_t009.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 154112,
+      "fn": 0,
+      "tn": 4923136,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaanrp\\s006_2013\\01_tcp_ar\\aaaaanrp_s006_t001.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 138240,
+      "fn": 0,
+      "tn": 5092864,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaabom\\s005_2006\\03_tcp_ar_a\\aaaaabom_s005_t015.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 52800,
+      "fn": 0,
+      "tn": 13200,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaaict\\s004_2011\\01_tcp_ar\\aaaaaict_s004_t000.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 50000,
+      "fn": 0,
+      "tn": 16600000,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaahie\\s023_2016\\01_tcp_ar\\aaaaahie_s023_t021.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 10137600,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaammu\\s003_2012\\01_tcp_ar\\aaaaammu_s003_t004.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 1536,
+      "fn": 80646,
+      "tn": 4683258,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 21,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaanme\\s010_2014\\01_tcp_ar\\aaaaanme_s010_t003.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 88482,
+      "tn": 8014942,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 3,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaatem\\s003_2015\\01_tcp_ar\\aaaaatem_s003_t009.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 961536,
+      "fn": 0,
+      "tn": 7192832,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 21,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\v3.0.1\\edf\\01_tcp_ar\\aaaaamhb_s006_t001.edf",
+      "source": "seizure",
+      "tp": 3089,
+      "fp": 1730543,
+      "fn": 3748118,
+      "tn": 26085610,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 21,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaagxr\\s016_2015\\03_tcp_ar_a\\aaaaagxr_s016_t008.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 3840000,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 19,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaatez\\s006_2015\\01_tcp_ar\\aaaaatez_s006_t001.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 3072,
+      "fn": 0,
+      "tn": 50688,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaaoek\\s030_2013\\01_tcp_ar\\aaaaaoek_s030_t004.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 8192,
+      "fn": 0,
+      "tn": 2603008,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\eval\\aaaaardf\\s004_2014\\01_tcp_ar\\aaaaardf_s004_t013.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 760320,
+      "fn": 11600,
+      "tn": 5191344,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 5,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaadsz\\s002_2006\\01_tcp_ar\\aaaaadsz_s002_t000.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 2930400,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\eval\\aaaaardf\\s005_2014\\01_tcp_ar\\aaaaardf_s005_t009.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 433152,
+      "fn": 0,
+      "tn": 2178048,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaagxr\\s015_2015\\03_tcp_ar_a\\aaaaagxr_s015_t006.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 7692800,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 19,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaamoa\\s003_2012\\01_tcp_ar\\aaaaamoa_s003_t006.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 5124096,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 21,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaanme\\s005_2014\\01_tcp_ar\\aaaaanme_s005_t006.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 1387008,
+      "fn": 0,
+      "tn": 13358592,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaajqo\\s011_2010\\03_tcp_ar_a\\aaaaajqo_s011_t016.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 234496,
+      "fn": 0,
+      "tn": 2354944,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\eval\\aaaaaqek\\s008_2015\\01_tcp_ar\\aaaaaqek_s008_t007.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 308736,
+      "fn": 0,
+      "tn": 4768512,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaatjh\\s002_2015\\03_tcp_ar_a\\aaaaatjh_s002_t016.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 1024,
+      "fn": 24670,
+      "tn": 2969506,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 5,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaaipg\\s001_2008\\02_tcp_le\\aaaaaipg_s001_t000.edf",
+      "source": "seizure",
+      "tp": 118000,
+      "fp": 2651500,
+      "fn": 2884934,
+      "tn": 14092566,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 21,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaapks\\s018_2014\\03_tcp_ar_a\\aaaaapks_s018_t010.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 154624,
+      "fn": 0,
+      "tn": 4768768,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaampz\\s004_2015\\01_tcp_ar\\aaaaampz_s004_t000.edf",
+      "source": "seizure",
+      "tp": 512,
+      "fp": 454144,
+      "fn": 59774,
+      "tn": 11760770,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 21,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaakvh\\s001_2010\\01_tcp_ar\\aaaaakvh_s001_t000.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 36500,
+      "fn": 0,
+      "tn": 305750,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaapxw\\s002_2013\\01_tcp_ar\\aaaaapxw_s002_t004.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 138240,
+      "fn": 0,
+      "tn": 2088960,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaamqy\\s008_2013\\01_tcp_ar\\aaaaamqy_s008_t004.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 512,
+      "fn": 0,
+      "tn": 4615168,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 3,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaarsp\\s003_2014\\03_tcp_ar_a\\aaaaarsp_s003_t016.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 28672,
+      "fn": 0,
+      "tn": 5058560,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaakcy\\s010_2015\\01_tcp_ar\\aaaaakcy_s010_t008.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 175104,
+      "fn": 0,
+      "tn": 6388992,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaahie\\s026_2016\\01_tcp_ar\\aaaaahie_s026_t005.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 8704,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaadmi\\s011_2015\\01_tcp_ar\\aaaaadmi_s011_t005.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 161280,
+      "fn": 0,
+      "tn": 2142720,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaajfq\\s004_2010\\03_tcp_ar_a\\aaaaajfq_s004_t006.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 32000,
+      "fn": 0,
+      "tn": 4244800,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaappr\\s001_2013\\01_tcp_ar\\aaaaappr_s001_t001.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 56500,
+      "fn": 0,
+      "tn": 16996000,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 2,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaaool\\s005_2013\\01_tcp_ar\\aaaaaool_s005_t004.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 1299456,
+      "fn": 0,
+      "tn": 6289664,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 2,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaakpu\\s002_2010\\03_tcp_ar_a\\aaaaakpu_s002_t004.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 4026000,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaamqq\\s004_2012\\01_tcp_ar\\aaaaamqq_s004_t012.edf",
+      "source": "seizure",
+      "tp": 11768,
+      "fp": 650248,
+      "fn": 297372,
+      "tn": 5964132,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 11,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaalfs\\s002_2010\\03_tcp_ar_a\\aaaaalfs_s002_t005.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 54272,
+      "fn": 117711,
+      "tn": 6443825,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 9,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaagpk\\s013_2014\\01_tcp_ar\\aaaaagpk_s013_t004.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 5376,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaaike\\s004_2009\\02_tcp_le\\aaaaaike_s004_t001.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 3281500,
+      "fn": 0,
+      "tn": 13287500,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\eval\\aaaaasjz\\s003_2014\\01_tcp_ar\\aaaaasjz_s003_t001.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 222720,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaatgc\\s006_2015\\03_tcp_ar_a\\aaaaatgc_s006_t003.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 241920,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaaoek\\s032_2013\\01_tcp_ar\\aaaaaoek_s032_t005.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 411136,
+      "fn": 0,
+      "tn": 4819968,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaajqu\\s003_2010\\03_tcp_ar_a\\aaaaajqu_s003_t000.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 3200,
+      "fn": 0,
+      "tn": 5606800,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaaqyo\\s003_2014\\01_tcp_ar\\aaaaaqyo_s003_t005.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 352768,
+      "fn": 0,
+      "tn": 2181632,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaaakm\\s008_2003\\01_tcp_ar\\aaaaaakm_s008_t004.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 3366000,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaardk\\s002_2014\\03_tcp_ar_a\\aaaaardk_s002_t000.edf",
+      "source": "seizure",
+      "tp": 1024,
+      "fp": 33792,
+      "fn": 1131312,
+      "tn": 2082512,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 14,
+        "unmatched": 2
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaanrp\\s004_2013\\01_tcp_ar\\aaaaanrp_s004_t003.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 1353728,
+      "fn": 0,
+      "tn": 3877376,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaaiea\\s004_2009\\03_tcp_ar_a\\aaaaaiea_s004_t000.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 145200,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaandx\\s004_2012\\01_tcp_ar\\aaaaandx_s004_t000.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 54784,
+      "fn": 0,
+      "tn": 2633216,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaamgy\\s002_2011\\01_tcp_ar\\aaaaamgy_s002_t004.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 160256,
+      "fn": 0,
+      "tn": 2527744,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaaqro\\s002_2014\\01_tcp_ar\\aaaaaqro_s002_t009.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 8704,
+      "fn": 0,
+      "tn": 15658496,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaatki\\s003_2015\\03_tcp_ar_a\\aaaaatki_s003_t004.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 1568256,
+      "fn": 0,
+      "tn": 14559744,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaabln\\s003_2004\\03_tcp_ar_a\\aaaaabln_s003_t007.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 180800,
+      "fn": 0,
+      "tn": 3581200,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaammu\\s004_2012\\01_tcp_ar\\aaaaammu_s004_t004.edf",
+      "source": "seizure",
+      "tp": 29124,
+      "fp": 54332,
+      "fn": 228044,
+      "tn": 7535156,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 21,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaamva\\s005_2016\\01_tcp_ar\\aaaaamva_s005_t000.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 1024,
+      "fn": 0,
+      "tn": 9675776,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaaovm\\s005_2013\\01_tcp_ar\\aaaaaovm_s005_t008.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 4461824,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaajqo\\s010_2010\\03_tcp_ar_a\\aaaaajqo_s010_t006.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 282919,
+      "tn": 6660057,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 19,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaabhz\\s009_2010\\03_tcp_ar_a\\aaaaabhz_s009_t007.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 33600,
+      "fn": 345468,
+      "tn": 3170532,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 19,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaatds\\s003_2015\\01_tcp_ar\\aaaaatds_s003_t000.edf",
+      "source": "seizure",
+      "tp": 6144,
+      "fp": 4096,
+      "fn": 1061888,
+      "tn": 2460672,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 14,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaalwk\\s004_2011\\03_tcp_ar_a\\aaaaalwk_s004_t003.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 30720,
+      "fn": 0,
+      "tn": 2657280,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaakcy\\s010_2015\\01_tcp_ar\\aaaaakcy_s010_t004.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 230400,
+      "fn": 0,
+      "tn": 3672576,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaakcy\\s010_2015\\01_tcp_ar\\aaaaakcy_s010_t001.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 7611648,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaatez\\s002_2015\\03_tcp_ar_a\\aaaaatez_s002_t000.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 1389056,
+      "fn": 58710,
+      "tn": 6017194,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 2,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaatvr\\s005_2015\\01_tcp_ar\\aaaaatvr_s005_t001.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 5120,
+      "fn": 0,
+      "tn": 2306560,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\eval\\aaaaaqfm\\s005_2014\\01_tcp_ar\\aaaaaqfm_s005_t009.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 312832,
+      "fn": 0,
+      "tn": 4302848,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaajat\\s006_2010\\03_tcp_ar_a\\aaaaajat_s006_t005.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 12000,
+      "fn": 0,
+      "tn": 12948000,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaaoya\\s005_2015\\01_tcp_ar\\aaaaaoya_s005_t001.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 284672,
+      "fn": 0,
+      "tn": 4331008,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaaoys\\s003_2013\\01_tcp_ar\\aaaaaoys_s003_t002.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 923648,
+      "fn": 0,
+      "tn": 7767040,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 2,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaapks\\s007_2013\\01_tcp_ar\\aaaaapks_s007_t002.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 3146752,
+      "fn": 0,
+      "tn": 1161216,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaamnd\\s026_2015\\01_tcp_ar\\aaaaamnd_s026_t001.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 290000,
+      "fn": 0,
+      "tn": 20232000,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\dev\\aaaaaoek\\s006_2013\\01_tcp_ar\\aaaaaoek_s006_t011.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 4307968,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaabhz\\s011_2010\\03_tcp_ar_a\\aaaaabhz_s011_t003.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 287459,
+      "tn": 3894541,
+      "channel_match": {
+        "direct": 1,
+        "bipolar_derived": 19,
+        "unmatched": 0
+      }
+    },
+    {
+      "path": "\\\\wsl.localhost\\Ubuntu-24.04\\home\\peppe\\tuh_eeg_seizure_v2.0.6\\edf\\train\\aaaaalwv\\s004_2011\\03_tcp_ar_a\\aaaaalwv_s004_t000.edf",
+      "source": "seizure",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "tn": 1214400,
+      "channel_match": {
+        "direct": 0,
+        "bipolar_derived": 1,
+        "unmatched": 0
+      }
+    }
+  ]
+}

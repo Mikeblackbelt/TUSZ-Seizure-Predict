@@ -175,6 +175,23 @@ Rows are sorted by `(edf_path, channel, start_time, priority)` and then deduplic
 
 A standalone module (with its own `requirements.txt`) that trains the 3-class (clean EEG / EOG / EMG) classifier consumed by `pipeline/artifact_detection.py`.
 
+### TUAR-derived dataset building and retraining
+
+The repository now includes a TUAR-specific dataset builder and trainer wrapper in `EEG_Artifact_Detection/retrain.py`.
+
+- `tuar_data_builder.py` builds a patient-level TUAR `train`/`val`/`test` split, resamples recordings to 256 Hz, applies the 1-80 Hz bandpass filter, segments them into 512-sample windows, labels each window as clean/EOG/EMG, and saves `X.npy` / `Y.npy` under the configured output data path.
+- `tuar_trainer.py` defines a TUAR-aware trainer subclass that skips the default synthetic `DataNoiseCombiner` data generation and trains directly on the prebuilt TUAR dataset.
+
+Usage:
+
+```bash
+cd EEG_Artifact_Detection
+python retrain.py --tuar-path /data/tuh_eeg_artifact/v3.0.1 --out-datapath ./tuar_data
+python retrain.py --tuar-path /data/tuh_eeg_artifact/v3.0.1 --out-datapath ./tuar_data --train --model MLP --pca --num-epochs 100
+```
+
+The `--train` flag runs training after building the dataset; without it, `retrain.py` only constructs the TUAR-derived data files.
+
 1. Loads clean EEG epochs alongside EOG and EMG noise epochs, already bandpass-filtered to 0-80 Hz.
 2. Synthetically combines clean EEG with EOG/EMG noise at a range of SNRs to build labeled 3-class data (`DataNoiseCombiner`), split into `train`/`val`/per-SNR `test` sets and z-scored per epoch.
 3. Extracts a feature vector per epoch: a level-4 wavelet-style low-frequency approximation concatenated with the epoch's power spectral density.
@@ -183,8 +200,7 @@ A standalone module (with its own `requirements.txt`) that trains the 3-class (c
 
 ```bash
 cd EEG_Artifact_Detection
-python main.py --model MLP --pca --ica   # or --model CNN / --model SincNet
-```
+python retrain.py --tuar-path path_to_tuar --num-epochs 200 --train --max-windows -1 --tmp-dir path_to_temp```
 
 Checkpoints (`best_model.pth`) and preprocessors (`scaler.pkl`, `pca.pkl`) are written to `checkpoints/`, which is exactly where `pipeline/artifact_detection.py` looks for them by default. See `EEG_Artifact_Detection/README.md` for the full argument reference, data layout, and internals of that module.
 

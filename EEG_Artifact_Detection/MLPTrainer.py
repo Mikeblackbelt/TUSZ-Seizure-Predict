@@ -23,6 +23,7 @@ from utils import calculate_metrics, setup_logging, EarlyStopping
 import numpy as np
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
+from models import ArtifactDetectionNN, ArtifactDetectionCNN, ConvNet, FocalLoss
 
 run_datetime = datetime.datetime.now()
 plt.rcParams.update({'font.size': 14})
@@ -72,7 +73,8 @@ class MLPTrainer:
         self._init_training_components()
         self._init_metrics()
         self._epoch_durations = []
-
+        self.optimizer = optim.Adam(self.model.parameters(), lr=self.config.learning_rate)
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
     # ------------------------------------------------------------------ #
     # Logging helpers
     # ------------------------------------------------------------------ #
@@ -137,25 +139,26 @@ class MLPTrainer:
         Load the training, validation, and SNR-specific test datasets from the configured data directory.
         """
         with self._log_step("Loading train dataset"):
-            self.train_dataset = EEGDataset(Path(self.config.datapath) / "train")
+            self.train_dataset = EEGDataset(Path(self.config.datapath) / "train", raw=(self.config.model in ('CNN', 'SincNet')))
         logging.info(f"Train dataset: {len(self.train_dataset):,} windows")
 
         with self._log_step("Loading validation dataset"):
-            self.val_dataset = EEGDataset(Path(self.config.datapath) / "val")
+            self.val_dataset = EEGDataset(Path(self.config.datapath) / "val", raw=(self.config.model in ('CNN', 'SincNet')))
         logging.info(f"Validation dataset: {len(self.val_dataset):,} windows")
 
         with self._log_step("Loading test datasets (all SNRs)"):
-            self.test_datasets = self._load_test_datasets(Path(self.config.datapath) / "test")
+            self.test_datasets = self._load_test_datasets(Path(self.config.datapath) / "test", raw=(self.config.model in ('CNN', 'SincNet')))
         total_test = sum(len(d) for d in self.test_datasets.values())
         logging.info(f"Test datasets: {len(self.test_datasets)} SNR levels, "
                      f"{total_test:,} windows total")
 
-    def _load_test_datasets(self, test_dir):
+    def _load_test_datasets(self, test_dir, raw=False):
         """
         Load test datasets keyed by SNR strings extracted from subdirectory names.
         
         Parameters:
         	test_dir (Path): Directory containing one subdirectory for each test SNR.
+        	raw (bool): Whether to use raw features without preprocessing.
         
         Returns:
         	dict: Mapping of SNR strings to their corresponding EEG datasets.
@@ -164,7 +167,7 @@ class MLPTrainer:
         snr_dirs = [d for d in test_dir.iterdir() if d.is_dir()]
         for snr_dir in tqdm(snr_dirs, desc="Loading test SNR folders", unit="snr"):
             snr_value = snr_dir.name.split(' ')[-1]
-            test_datasets[snr_value] = EEGDataset(snr_dir)
+            test_datasets[snr_value] = EEGDataset(snr_dir, raw=raw)
             logging.info(f"  SNR {snr_value}: {len(test_datasets[snr_value]):,} windows")
         return test_datasets
 
@@ -189,13 +192,17 @@ class MLPTrainer:
         logging.info(f"Model: {self.config.model}, {n_params:,} parameters")
 
     def _init_training_components(self):
-        """Initialize the loss function, optimizer, early-stopping handler, and training data loaders."""
-        self.criterion = CrossEntropyLoss()
+        counts = np.bincount(self.train_dataset.labels.astype(int), minlength=3).astype(np.float64)
+        weights = np.sqrt(counts.sum() / (len(counts) * counts))
+        weights = weights / weights.mean()
+        class_weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
+        self.criterion = FocalLoss(alpha=class_weights, gamma=2.0)
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.config.learning_rate)
-        self.early_stopping = EarlyStopping(patience=20, min_delta=0)
+        self.early_stopping = EarlyStopping(patience=self.config.patience, min_delta=0)
         self.train_loader, self.val_loader = self._split_dataset()
+        logging.info(f"Class counts: {counts.tolist()}, class weights: {weights.tolist()}")
         logging.info(f"Train batches/epoch: {len(self.train_loader):,}, "
-                     f"Val batches/epoch: {len(self.val_loader):,}")
+                    f"Val batches/epoch: {len(self.val_loader):,}")
 
     def _init_metrics(self):
         """
@@ -712,6 +719,7 @@ class MLPTrainer:
 
             self.train_one_epoch(epoch)
             self.validate_one_epoch(epoch)
+            self.scheduler.step(self.val_losses[-1])
 
             epoch_duration = time.time() - epoch_t0
             self._epoch_durations.append(epoch_duration)

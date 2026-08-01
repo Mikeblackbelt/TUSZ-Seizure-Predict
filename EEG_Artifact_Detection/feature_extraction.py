@@ -83,20 +83,33 @@ def wavelet_4th_level_approximation_simulation(signal, level=4):
     decimated_signal = decimate_signal(filtered_signal, decimation_factor=2**level)
     return decimated_signal.flatten()
 
+def band_powers(signal, fs=256):
+    """Relative power in canonical EEG bands + a high-freq EMG-sensitive band."""
+    freqs, psd = welch(signal, fs=fs)
+    bands = {'delta': (0.5, 4), 'theta': (4, 8), 'alpha': (8, 13),
+              'beta': (13, 30), 'gamma_emg': (30, 100)}
+    total_power = np.trapezoid(psd, freqs) + 1e-12
+    feats = []
+    for lo, hi in bands.values():
+        mask = (freqs >= lo) & (freqs <= hi)
+        feats.append(np.trapezoid(psd[mask], freqs[mask]) / total_power)
+    return np.array(feats)
+
+def line_length(signal):
+    """Sum of absolute differences between consecutive samples — sensitive to EMG."""
+    return np.array([np.sum(np.abs(np.diff(signal)))])
+
+def zero_crossing_rate(signal):
+    return np.array([np.sum(np.diff(np.sign(signal)) != 0) / len(signal)])
+    
 def extract_features(eeg_signals):
-    """
-    Builds feature vectors for a collection of EEG signals.
-    
-    Parameters:
-    	eeg_signals: EEG signals to process.
-    
-    Returns:
-    	NumPy array containing one concatenated low-frequency approximation and power spectral density feature vector per signal.
-    """
     features = []
     for signal in eeg_signals:
         low_pass_info = wavelet_4th_level_approximation_simulation(signal)
         psd = power_spectral_density(signal)
-        feature_vector = np.concatenate([low_pass_info, psd])
+        bp = band_powers(signal)
+        ll = line_length(signal)
+        zcr = zero_crossing_rate(signal)
+        feature_vector = np.concatenate([low_pass_info, psd, bp, ll, zcr])
         features.append(feature_vector)
     return np.array(features)

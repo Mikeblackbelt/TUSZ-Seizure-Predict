@@ -1,4 +1,4 @@
-C:\Users\peppe\Tuh-Preprocess\data.csv
+C:/Users/peppe/Tuh-Preprocess/data.csv
 dev
 
 # Byte-compiled / optimized / DLL files
@@ -8,7 +8,7 @@ __pycache__/
 
 # C extensions
 *.so
-
+tuh_eeg_artifact_v3.0.1/
 # Distribution / packaging
 .Python
 build/
