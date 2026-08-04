@@ -3,6 +3,8 @@ import numpy as np
 
 from pipeline.checkpoint_io import save_checkpoint
 from pipeline.eeg_channels import CHANNELS_TO_INCLUDE, N_TARGET_CHANNELS
+from filters.adaptive_filters import detect_noise_frequencies, apply_notch_filter
+from filters.simple_filters import bandpass_filter_raw
 from util import handle_logs
 
 logger = handle_logs.get_logger("raw_eeg_extraction", "applog")
@@ -10,10 +12,35 @@ logger = handle_logs.get_logger("raw_eeg_extraction", "applog")
 TARGET_SFREQ = 256  # Define target sampling rate centrally
 
 
-def concatenate_session_eeg(session, session_key=None, output_dir=None):
+def concatenate_session_eeg(
+    session,
+    session_key=None,
+    output_dir=None,
+    apply_filtering=True,
+    notch_variance_threshold=0.20,
+    notch_power_percentile=80,
+    bandpass_low=0.5,
+    bandpass_high=40.0,
+):
     """
-    Reads a session's .edf files, resamples each directly to TARGET_SFREQ (256 Hz),
-    and concatenates them into a continuous (N_TARGET_CHANNELS, total_resampled_samples) array.
+    Reads a session's .edf files, filters + resamples each directly to
+    TARGET_SFREQ (256 Hz), and concatenates them into a continuous
+    (N_TARGET_CHANNELS, total_resampled_samples) array.
+
+    Filtering (adaptive notch, then Butterworth bandpass) happens per-file,
+    at each file's native sample rate, before resampling - cutoffs are
+    relative to native fs, so filtering after resampling would change their
+    effective frequencies.
+
+    Parameters:
+        apply_filtering (bool): If True (default), run notch + bandpass
+            filtering on each file before resampling. Set False to skip
+            filtering entirely (e.g. for comparing filtered vs unfiltered
+            checkpoints).
+        notch_variance_threshold, notch_power_percentile: passed through to
+            adaptive_filters.detect_noise_frequencies().
+        bandpass_low, bandpass_high: passed through to
+            simple_filters.bandpass_filter_raw().
 
     Returns:
         np.ndarray of shape (N_TARGET_CHANNELS, total_resampled_samples), or None if
@@ -25,18 +52,37 @@ def concatenate_session_eeg(session, session_key=None, output_dir=None):
         logger.warning("Session has no .edf files - nothing to concatenate")
         return None
 
-    logger.info(f"Processing and resampling {len(edf_paths)} .edf recordings to {TARGET_SFREQ} Hz")
+    logger.info(
+        f"Processing {len(edf_paths)} .edf recordings "
+        f"({'filter + ' if apply_filtering else ''}resample to {TARGET_SFREQ} Hz)"
+    )
 
     resampled_chunks = []
 
     for edf_path in edf_paths:
-        raw = mne.io.read_raw_edf(edf_path, include=CHANNELS_TO_INCLUDE, verbose="Error")
+        # preload=True: both filtering and resample() need a writable
+        # in-memory array, not a lazy on-disk reference.
+        raw = mne.io.read_raw_edf(edf_path, include=CHANNELS_TO_INCLUDE, preload=True, verbose="Error")
 
         if len(raw.ch_names) != N_TARGET_CHANNELS:
             raise ValueError(
                 f"{edf_path}: found {len(raw.ch_names)} target channels, "
                 f"expected {N_TARGET_CHANNELS}"
             )
+
+        if apply_filtering:
+            noise_freqs = detect_noise_frequencies(
+                raw,
+                variance_threshold=notch_variance_threshold,
+                power_percentile=notch_power_percentile,
+            )
+            if noise_freqs:
+                logger.debug(f"{edf_path}: notching {noise_freqs}")
+                raw = apply_notch_filter(raw, noise_freqs)
+            else:
+                logger.debug(f"{edf_path}: no notch-worthy frequencies detected")
+
+            raw = bandpass_filter_raw(raw, low_cutoff=bandpass_low, high_cutoff=bandpass_high)
 
         if raw.info["sfreq"] != TARGET_SFREQ:
             raw.resample(TARGET_SFREQ, npad="auto", verbose="Error")
