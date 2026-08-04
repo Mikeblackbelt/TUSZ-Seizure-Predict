@@ -1,6 +1,7 @@
 C:\Users\peppe\Tuh-Preprocess\data.csv
 dev
-TESTING_raweeg_output
+train
+raweeg_output
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
