@@ -89,15 +89,15 @@ def main():
     # Timing parameters (SPH and SOP)
     sph = float(
         questionary.text(
-            "(SPH) Seizure Prediction Horizon / Buffer (seconds):", 
+            "(SOP) Seizure Occurrence Period / Buffer (seconds):", 
             default="120"
         ).ask()
     )
-    LOGGER.info(f"SPH buffer: {sph}s")
+    LOGGER.info(f"SOP buffer: {sph}s")
 
     sop = float(
         questionary.text(
-            "(SOP) Seizure Occurrence Period / Preictal duration (seconds):", 
+            "(SOP + SPH) / Preictal duration (seconds):", 
             default="420"
         ).ask()
     )
