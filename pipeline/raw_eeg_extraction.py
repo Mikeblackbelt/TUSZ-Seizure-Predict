@@ -1,7 +1,7 @@
 import mne
 import numpy as np
 
-from pipeline.checkpoint_io import save_checkpoint
+from pipeline.checkpoint_io import save_checkpoint, save_offsets
 from pipeline.eeg_channels import CHANNELS_TO_INCLUDE, N_TARGET_CHANNELS
 from filters.adaptive_filters import detect_noise_frequencies, apply_notch_filter
 from filters.simple_filters import bandpass_filter_raw
@@ -58,7 +58,8 @@ def concatenate_session_eeg(
     )
 
     resampled_chunks = []
-
+    file_offsets = []
+    running_sample = 0
     for edf_path in edf_paths:
         # preload=True: both filtering and resample() need a writable
         # in-memory array, not a lazy on-disk reference.
@@ -89,6 +90,13 @@ def concatenate_session_eeg(
 
         data = raw.get_data()
         resampled_chunks.append(data)
+        n_samples = data.shape[1]
+        file_offsets.append({
+            "edf_path": edf_path,
+            "start_sample": running_sample,
+            "end_sample": running_sample + n_samples,
+        })
+        running_sample += n_samples
         logger.debug(f"Read & resampled {edf_path} to shape {data.shape}")
 
     combined = np.concatenate(resampled_chunks, axis=1)
@@ -104,9 +112,10 @@ def concatenate_session_eeg(
                 "output_dir was given but session_key was not - "
                 "cannot determine output filename"
             )
+        save_offsets(file_offsets, session_key, output_dir)
         save_checkpoint(combined, session_key, output_dir, stage="raw")
 
-    return combined
+    return combined, file_offsets
 
 #test
 if __name__ == "__main__":
@@ -114,7 +123,7 @@ if __name__ == "__main__":
     from pipeline.raw_eeg_extraction import concatenate_session_eeg
     import time
 
-    sessions = index_sessions("dev")
+    sessions = index_sessions("train")
     session_keys = list(sessions.keys())[:10]
 
     for key in session_keys:
@@ -125,7 +134,7 @@ if __name__ == "__main__":
 
         start_time = time.time()
 
-        result = concatenate_session_eeg(
+        result, file_offsets = concatenate_session_eeg(
             session,
             session_key=key,
             output_dir="raweeg_output"
