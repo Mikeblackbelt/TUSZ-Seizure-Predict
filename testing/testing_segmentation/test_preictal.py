@@ -40,40 +40,41 @@ def test_preictal_labels(sample_master):
 def test_preictal_times_clean(sample_master):
     # row1: start=100, cutoff=10, dur=50 -> raw_end=90, raw_start=40 -> both > 0
     # row2: start=400, cutoff=10, dur=50 -> raw_end=390, raw_start=340 -> both > 0
+    # Expect status=1 for valid, full-length windows
     logger.info("test_preictal_times_clean: start")
     result = add_preictal_tags(sample_master, start_cutoff=10, max_duration=50)
 
     pfnsz = result[result["label"] == "pfnsz"].iloc[0]
     assert pfnsz["start_time"] == 40.0
     assert pfnsz["stop_time"] == 90.0
-    assert pfnsz["status"] == 0
+    assert pfnsz["status"] == 1
 
     pgnsz = result[result["label"] == "pgnsz"].iloc[0]
     assert pgnsz["start_time"] == 340.0
     assert pgnsz["stop_time"] == 390.0
-    assert pgnsz["status"] == 0
+    assert pgnsz["status"] == 1
     logger.info("test_preictal_times_clean: passed")
 
 def test_preictal_status_start_trimmed(sample_master):
     # row1: start=100, cutoff=10 -> raw_end=90 (>0), dur=200 -> raw_start=-110 (<=0)
-    # expect status=1, start clamped to 0, stop stays at raw_end
+    # Expect status=0 (omitted due to insufficient baseline), start and stop collapsed to 0
     logger.info("test_preictal_status_start_trimmed: start")
     result = add_preictal_tags(sample_master, start_cutoff=10, max_duration=200)
     pfnsz = result[result["label"] == "pfnsz"].iloc[0]
     assert pfnsz["start_time"] == 0.0
-    assert pfnsz["stop_time"] == 90.0
-    assert pfnsz["status"] == 1
+    assert pfnsz["stop_time"] == 0.0
+    assert pfnsz["status"] == 0
     logger.info("test_preictal_status_start_trimmed: passed")
 
 def test_preictal_status_collapsed(sample_master):
     # row1: start=100, cutoff=150 -> raw_end=-50 (<=0)
-    # expect status=2, start and stop both clamped to 0
+    # Expect status=0 (omitted), start and stop both collapsed to 0
     logger.info("test_preictal_status_collapsed: start")
     result = add_preictal_tags(sample_master, start_cutoff=150, max_duration=50)
     pfnsz = result[result["label"] == "pfnsz"].iloc[0]
     assert pfnsz["start_time"] == 0.0
     assert pfnsz["stop_time"] == 0.0
-    assert pfnsz["status"] == 2
+    assert pfnsz["status"] == 0
     logger.info("test_preictal_status_collapsed: passed")
 
 def test_preictal_status_never_negative(sample_master):

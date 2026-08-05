@@ -155,179 +155,107 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
     return master
 
 
-def add_preictal_tags(master_df, start_cutoff, max_duration):
+def add_preictal_tags(df: pd.DataFrame, start_cutoff: float, max_duration: float) -> pd.DataFrame:
     """
-    Add preictal window rows to a master annotations DataFrame.
+    Adds preictal windows ('p{type}') prior to seizure onset.
     
-    For each input row, creates a matching row labeled with a `p` prefix and
-    sets its time window to the interval ending `start_cutoff` seconds before
-    the original `start_time` and extending back up to `max_duration` seconds.
-    If the computed window would start before 0, it is clamped and marked with
-    a status value.
-    
-    Parameters:
-        master_df (pd.DataFrame): Master annotations table with at least
-            `split`, `edf_path`, `start_time`, `stop_time`, and `label` columns.
-        start_cutoff (numeric): Time gap to keep between the preictal window
-            end and the original `start_time`.
-        max_duration (numeric): Maximum length of each preictal window.
-    
-    Returns:
-        pd.DataFrame: The original rows plus the generated preictal rows, sorted
-        by split, EDF path, and start time.
-    
-    Raises:
-        ValueError: If master_df is None or empty.
+    Status codes:
+      -1 : Original seizure row
+       1 : Valid preictal window
+       0 : Collapsed window (insufficient baseline or start_time < 0)
     """
-    if master_df is None:
-        logger.error("master_df is None - cannot add preictal tags. Check that make_master_file() found valid records.")
-        raise ValueError("master_df cannot be None. No valid records found in dataset.")
+    rows = []
     
-    if master_df.empty:
-        logger.error("master_df is empty - cannot add preictal tags")
-        raise ValueError("master_df is empty. No valid records found in dataset.")
-    
-    logger.info(
-        f"Adding preictal tags (start_cutoff={start_cutoff}, max_duration={max_duration}) "
-        f"to {len(master_df)} rows"
-    )
-    preictal_rows = []
-    status_counts = {0: 0, 1: 0, 2: 0}
-
-    for _, row in master_df.iterrows():
-        ictal_start = row["start_time"]
-        raw_end = ictal_start - start_cutoff
-        raw_start = raw_end - max_duration
-
-        if raw_end <= 0:
-            preictal_start = 0
-            preictal_end = 0
-            status = 2
-        elif raw_start <= 0:
-            preictal_start = 0
-            preictal_end = raw_end
-            status = 1
+    for idx, row in df.iterrows():
+        # Retain original seizure row
+        rows.append(row.to_dict())
+        
+        pre_row = row.copy().to_dict()
+        pre_row["label"] = f"p{row['label']}"
+        
+        # Calculate raw times
+        raw_stop = row["start_time"] - start_cutoff
+        raw_start = raw_stop - max_duration
+        
+        # Binary check: If raw_start < 0 or raw_stop <= 0, collapse window to 0 with status 0
+        if raw_start < 0 or raw_stop <= 0:
+            pre_row["start_time"] = 0.0
+            pre_row["stop_time"] = 0.0
+            pre_row["status"] = 0  # Collapsed / omitted
         else:
-            preictal_start = raw_start
-            preictal_end = raw_end
-            status = 0
-
-        status_counts[status] += 1
-        if status != 0:
-            logger.debug(
-                f"Preictal window trimmed (status={status}) for {row['edf_path']} "
-                f"at ictal_start={ictal_start}"
-            )
-
-        preictal_rows.append({
-            **row.to_dict(),
-            "label": f"p{row['label']}",
-            "start_time": preictal_start,
-            "stop_time": preictal_end,
-            "status": status,
-        })
-
-    if status_counts[1] or status_counts[2]:
-        logger.warning(
-            f"{status_counts[1]} windows shortened (status=1), "
-            f"{status_counts[2]} windows collapsed to [0,0] (status=2)"
-        )
-
-    preictal_df = pd.DataFrame(preictal_rows)
-    result = pd.concat([master_df, preictal_df], ignore_index=True).sort_values(
-        ["split", "edf_path", "start_time"]
-    ).reset_index(drop=True)
-
-    logger.info(f"Preictal tags added - master now has {len(result)} rows")
-    return result
-
-def add_postictal_and_consecutive(master_df, postictal_length, preictal_length):
-    """
-    Add postictal and consecutive tags, then resolve overlaps with preictal.
-    """
-    if master_df is None or master_df.empty:
-        logger.error("master_df is None or empty - cannot add postictal/consecutive tags")
-        raise ValueError("master_df cannot be None or empty")
+            pre_row["start_time"] = raw_start
+            pre_row["stop_time"] = raw_stop
+            pre_row["status"] = 1  # Valid window
+            
+        rows.append(pre_row)
+        
+    result_df = pd.DataFrame(rows)
     
-    logger.info(
-        f"Adding postictal (length={postictal_length}) and consecutive tags "
-        f"(threshold={postictal_length + preictal_length})"
-    )
+    # Sort by split -> edf_path -> channel -> start_time
+    if not result_df.empty and all(col in result_df.columns for col in ["split", "edf_path", "channel", "start_time"]):
+        result_df = result_df.sort_values(
+            by=["split", "edf_path", "channel", "start_time"], 
+            ascending=[True, True, True, True]
+        ).reset_index(drop=True)
+        
+    return result_df
 
-    new_rows = []
-    group_cols = ["edf_path", "channel"]
 
-    for (edf_path, channel), group in master_df.groupby(group_cols):
-        ictal = group[~group["label"].astype(str).str.startswith("p", na=False)].copy()
-        if ictal.empty:
+def add_exclusion_intervals(
+    master_df: pd.DataFrame, 
+    postictal_time: float, 
+    sph: float, 
+    sop: float
+) -> pd.DataFrame:
+    """
+    Adds exclusion intervals ('x{type}') immediately after seizures.
+    """
+    rows = []
+    
+    for idx, row in master_df.iterrows():
+        rows.append(row.to_dict())
+        
+        # Skip creating exclusion tags for already-tagged preictal/exclusion rows
+        if str(row["label"]).startswith("p") or str(row["label"]).startswith("x"):
             continue
-
-        ictal = ictal.sort_values("start_time").reset_index(drop=True)
-
-        i = 0
-        while i < len(ictal):
-            row = ictal.iloc[i]
-            stop = float(row["stop_time"])
-            label = str(row["label"])
-
-            # Consecutive check
-            if i + 1 < len(ictal):
-                next_row = ictal.iloc[i + 1]
-                gap = float(next_row["start_time"]) - stop
-
-                if gap < (postictal_length + preictal_length):
-                    next_label = str(next_row["label"])
-                    c_label = f"c{label}2" if label == next_label else f"c{label}{next_label}"
-
-                    c_start = stop
-                    c_end = float(next_row["start_time"]) - preictal_length
-
-                    new_rows.append({
-                        **row.to_dict(),
-                        "label": c_label,
-                        "start_time": c_start,
-                        "stop_time": max(c_start, c_end),
-                        "status": 2 if c_end <= c_start else 0,
-                    })
-                    i += 2
-                    continue
-
-            # Postictal
-            new_rows.append({
-                **row.to_dict(),
-                "label": f"q{label}",
-                "start_time": stop,
-                "stop_time": stop + postictal_length,
-                "status": 0,
-            })
-            i += 1
-
-    if new_rows:
-        full_df = pd.concat([master_df, pd.DataFrame(new_rows)], ignore_index=True)
-    else:
-        full_df = master_df.copy()
-
-    full_df = resolve_overlaps(full_df)
-
-    return full_df.sort_values(["split", "edf_path", "channel", "start_time"]).reset_index(drop=True)
+            
+        excl_row = row.copy().to_dict()
+        excl_row["label"] = f"x{row['label']}"
+        
+        excl_start = row["stop_time"]
+        excl_stop = excl_start + postictal_time
+        
+        excl_row["start_time"] = excl_start
+        excl_row["stop_time"] = excl_stop
+        excl_row["status"] = 1  # Valid exclusion interval
+        
+        rows.append(excl_row)
+        
+    result_df = pd.DataFrame(rows)
+    
+    if not result_df.empty and all(col in result_df.columns for col in ["split", "edf_path", "channel", "start_time"]):
+        result_df = result_df.sort_values(
+            by=["split", "edf_path", "channel", "start_time"], 
+            ascending=[True, True, True, True]
+        ).reset_index(drop=True)
+        
+    return result_df
 
 def resolve_overlaps(df: pd.DataFrame) -> pd.DataFrame:
     """
     Keep only the highest priority annotation when overlaps occur on the same (edf_path, channel).
-    Priority: consecutive (c*) > preictal (p*) > original ictal > postictal (q*)
+    Priority: exclusion (x*) > preictal (p*) > original ictal
     """
     if df.empty:
         return df
 
     def get_priority(label):
         lbl = str(label)
-        if lbl.startswith('c'):
-            return 4
-        if lbl.startswith('p'):
+        if lbl.startswith('x'):
             return 3
-        if lbl.startswith('q'):
-            return 1
-        return 2 
+        if lbl.startswith('p'):
+            return 2
+        return 1
     
     df = df.copy()
     df['priority'] = df['label'].apply(get_priority)

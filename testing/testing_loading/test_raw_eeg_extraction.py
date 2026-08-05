@@ -9,8 +9,9 @@ from util import handle_logs
 
 logger = handle_logs.get_logger("raw_eeg_extraction", "applog")
 
-TARGET_SFREQ = 256 
+TARGET_SFREQ = 256  # Define target sampling rate centrally
 
+# Canonical channel order we strictly enforce across all files
 CANONICAL_CHANNELS = [
     'FP1', 'F7', 'T3', 'T5', 'O1', 'FP2', 'F8', 'T4', 'T6', 'O2', 
     'F3', 'C3', 'P3', 'F4', 'C4', 'P4', 'CZ'

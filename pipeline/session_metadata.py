@@ -129,9 +129,10 @@ def main():
     sessions = index_sessions("dev")
     print(f"{len(sessions)} sessions found")
 
-    for session in sessions.items():
+    for session_key, session in sessions.items():
         metadata = extract_session_metadata(session)
         print(metadata)
+
 
 if __name__ == "__main__":
     main()
