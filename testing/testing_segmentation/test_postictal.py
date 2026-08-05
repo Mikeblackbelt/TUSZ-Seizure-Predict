@@ -3,7 +3,7 @@ import pandas as pd
 from pipeline.preictal_segment import (
     make_master_file,
     add_preictal_tags,
-    add_postictal_and_consecutive,
+    add_exclusion_intervals,
     get_split,
 )
 from util import handle_logs
@@ -11,7 +11,7 @@ from testing.helpers import *
 
 @pytest.fixture
 def sample_ictal():
-    """Sample with multiple seizures on same file + channel for consecutive testing"""
+    """Sample with multiple seizures on same file + channel for testing exclusion intervals"""
     return pd.DataFrame({
         "edf_path":   ["a.edf", "a.edf", "a.edf", "b.edf"],
         "csv_path":   ["a.csv", "a.csv", "a.csv", "b.csv"],
@@ -26,36 +26,39 @@ def sample_ictal():
 
 
 def test_postictal_and_consecutive_row_count(sample_ictal):
-    """Should add postictal for isolated seizures and consecutive for close pairs"""
+    """Should add exclusion intervals for seizures"""
     logger.info("test_postictal_and_consecutive_row_count: start")
     
-    result = add_postictal_and_consecutive(
-        sample_ictal, 
-        postictal_length=60, 
-        preictal_length=30
+    result = add_exclusion_intervals(
+        master_df=sample_ictal, 
+        postictal_time=60, 
+        sph=10, 
+        sop=50
     )
-    
     assert len(result) > len(sample_ictal)
     logger.info("test_postictal_and_consecutive_row_count: passed")
 
 
 def test_consecutive_tag_creation(sample_ictal):
-    """Test c{type1}{type2} and c{type}2 logic"""
+    """Test x{type} exclusion tag creation logic"""
     logger.info("test_consecutive_tag_creation: start")
    
-    # Use parameters that WILL trigger consecutive (gap=190)
-    result = add_postictal_and_consecutive(sample_ictal, postictal_length=100, preictal_length=100)
+    result = add_exclusion_intervals(
+        master_df=sample_ictal,
+        postictal_time=100,
+        sph=10,
+        sop=90
+    )
    
     labels = set(result["label"].unique())
    
-    assert "cfnsz2" in labels, f"Expected cfnsz2, got {labels}"
-    assert any(l.startswith("c") for l in labels)
-    assert any(l.startswith("q") for l in labels)
+    assert "xfnsz" in labels, f"Expected xfnsz in labels, got {labels}"
+    assert any(l.startswith("x") for l in labels)
     logger.info("test_consecutive_tag_creation: passed")
 
 
 def test_consecutive_vs_different_types(sample_ictal):
-    """Different seizure types should produce c{type1}{type2}"""
+    """Different seizure types should produce x{type1} and x{type2} exclusion windows"""
     logger.info("test_consecutive_vs_different_types: start")
    
     test_df = sample_ictal.copy()
@@ -64,35 +67,52 @@ def test_consecutive_vs_different_types(sample_ictal):
     test_df.loc[1, "stop_time"] = 160.0
     test_df.loc[1, "label"] = "gnsz"
     
-    result = add_postictal_and_consecutive(test_df, postictal_length=50, preictal_length=30)
+    result = add_exclusion_intervals(
+        master_df=test_df,
+        postictal_time=50,
+        sph=10,
+        sop=20
+    )
    
-    consec_labels = [lbl for lbl in result["label"] if lbl.startswith("c")]
-    assert any("cfnszgnsz" in lbl for lbl in consec_labels), f"Expected cfnszgnsz, got {consec_labels}"
+    exclusion_labels = [lbl for lbl in result["label"] if lbl.startswith("x")]
+    assert "xfnsz" in exclusion_labels and "xgnsz" in exclusion_labels, f"Expected xfnsz and xgnsz, got {exclusion_labels}"
     logger.info("test_consecutive_vs_different_types: passed")
 
+
 def test_consecutive_time_window(sample_ictal):
-    """Check that consecutive tag covers postictal of first + preictal of second"""
+    """Check that exclusion interval start time aligns with seizure stop time"""
     logger.info("test_consecutive_time_window: start")
     
-    result = add_postictal_and_consecutive(sample_ictal, postictal_length=60, preictal_length=30)
-    result2 = add_postictal_and_consecutive(sample_ictal, postictal_length=100, preictal_length=100)
+    result = add_exclusion_intervals(
+        master_df=sample_ictal,
+        postictal_time=100,
+        sph=10,
+        sop=90
+    )
     
-    consec = result2[result2["label"].str.startswith("c")]
-    assert not consec.empty
+    exclusions = result[result["label"].str.startswith("x")]
+    assert not exclusions.empty
     
-    assert consec.iloc[0]["start_time"] == 110.0
+    # Filter for 'a.edf' specifically (since 'dev' split sorts before 'train')
+    a_excl = exclusions[exclusions["edf_path"] == "a.edf"]
+    assert a_excl.iloc[0]["start_time"] == 110.0
     logger.info("test_consecutive_time_window: passed")
 
 
 def test_postictal_tag_for_isolated_seizure(sample_ictal):
-    """Seizures that are far apart should get q{type}"""
+    """Seizures should generate x{type} exclusion tags"""
     logger.info("test_postictal_tag_for_isolated_seizure: start")
     
-    result = add_postictal_and_consecutive(sample_ictal, postictal_length=60, preictal_length=30)
+    result = add_exclusion_intervals(
+        master_df=sample_ictal,
+        postictal_time=60,
+        sph=10,
+        sop=20
+    )
     
-    q_tags = result[result["label"].str.startswith("q")]
-    assert not q_tags.empty
-    assert any("qfnsz" in lbl or "qgnsz" in lbl for lbl in q_tags["label"].values)
+    x_tags = result[result["label"].str.startswith("x")]
+    assert not x_tags.empty
+    assert any("xfnsz" in lbl or "xgnsz" in lbl for lbl in x_tags["label"].values)
     logger.info("test_postictal_tag_for_isolated_seizure: passed")
 
 
@@ -100,7 +120,12 @@ def test_postictal_consecutive_original_rows_unchanged(sample_ictal):
     """Original ictal rows should remain intact"""
     logger.info("test_postictal_consecutive_original_rows_unchanged: start")
     
-    result = add_postictal_and_consecutive(sample_ictal, postictal_length=60, preictal_length=30)
+    result = add_exclusion_intervals(
+        master_df=sample_ictal,
+        postictal_time=60,
+        sph=10,
+        sop=20
+    )
     
     original_fnsz = result[result["label"] == "fnsz"]
     assert len(original_fnsz) == 3  # original count preserved
@@ -108,10 +133,15 @@ def test_postictal_consecutive_original_rows_unchanged(sample_ictal):
 
 
 def test_postictal_consecutive_sorted(sample_ictal):
-    """Final result should be sorted by split → edf_path → channel → start_time"""
+    """Final result should be sorted by split -> edf_path -> channel -> start_time"""
     logger.info("test_postictal_consecutive_sorted: start")
     
-    result = add_postictal_and_consecutive(sample_ictal, postictal_length=60, preictal_length=30)
+    result = add_exclusion_intervals(
+        master_df=sample_ictal,
+        postictal_time=60,
+        sph=10,
+        sop=20
+    )
     
     assert result["start_time"].is_monotonic_increasing == False  # because different files
     for _, group in result.groupby(["split", "edf_path", "channel"]):
@@ -120,11 +150,16 @@ def test_postictal_consecutive_sorted(sample_ictal):
 
 
 def test_status_for_trimmed_windows(sample_ictal):
-    """Basic check that status is set on trimmed windows"""
+    """Basic check that status is handled on exclusion windows"""
     logger.info("test_status_for_trimmed_windows: start")
     
-    result = add_postictal_and_consecutive(sample_ictal, postictal_length=1000, preictal_length=1000)
+    result = add_exclusion_intervals(
+        master_df=sample_ictal,
+        postictal_time=1000,
+        sph=100,
+        sop=900
+    )
     
-    trimmed = result[result["status"] > 0]
-    assert len(trimmed) >= 0  # at least doesn't crash
+    exclusion_rows = result[result["label"].str.startswith("x")]
+    assert not exclusion_rows.empty
     logger.info("test_status_for_trimmed_windows: passed")
