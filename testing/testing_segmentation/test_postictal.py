@@ -31,9 +31,7 @@ def test_postictal_and_consecutive_row_count(sample_ictal):
     
     result = add_exclusion_intervals(
         master_df=sample_ictal, 
-        postictal_time=60, 
-        sph=10, 
-        sop=50
+        postictal_time=60
     )
     assert len(result) > len(sample_ictal)
     logger.info("test_postictal_and_consecutive_row_count: passed")
@@ -45,9 +43,7 @@ def test_consecutive_tag_creation(sample_ictal):
    
     result = add_exclusion_intervals(
         master_df=sample_ictal,
-        postictal_time=100,
-        sph=10,
-        sop=90
+        postictal_time=100
     )
    
     labels = set(result["label"].unique())
@@ -69,9 +65,7 @@ def test_consecutive_vs_different_types(sample_ictal):
     
     result = add_exclusion_intervals(
         master_df=test_df,
-        postictal_time=50,
-        sph=10,
-        sop=20
+        postictal_time=50
     )
    
     exclusion_labels = [lbl for lbl in result["label"] if lbl.startswith("x")]
@@ -85,9 +79,7 @@ def test_consecutive_time_window(sample_ictal):
     
     result = add_exclusion_intervals(
         master_df=sample_ictal,
-        postictal_time=100,
-        sph=10,
-        sop=90
+        postictal_time=100
     )
     
     exclusions = result[result["label"].str.startswith("x")]
@@ -105,9 +97,7 @@ def test_postictal_tag_for_isolated_seizure(sample_ictal):
     
     result = add_exclusion_intervals(
         master_df=sample_ictal,
-        postictal_time=60,
-        sph=10,
-        sop=20
+        postictal_time=60
     )
     
     x_tags = result[result["label"].str.startswith("x")]
@@ -122,9 +112,7 @@ def test_postictal_consecutive_original_rows_unchanged(sample_ictal):
     
     result = add_exclusion_intervals(
         master_df=sample_ictal,
-        postictal_time=60,
-        sph=10,
-        sop=20
+        postictal_time=60
     )
     
     original_fnsz = result[result["label"] == "fnsz"]
@@ -138,9 +126,7 @@ def test_postictal_consecutive_sorted(sample_ictal):
     
     result = add_exclusion_intervals(
         master_df=sample_ictal,
-        postictal_time=60,
-        sph=10,
-        sop=20
+        postictal_time=60
     )
     
     assert result["start_time"].is_monotonic_increasing == False  # because different files
@@ -149,17 +135,15 @@ def test_postictal_consecutive_sorted(sample_ictal):
     logger.info("test_postictal_consecutive_sorted: passed")
 
 
-def test_status_for_trimmed_windows(sample_ictal):
+def test_status_for_exclusion_windows(sample_ictal):
     """Basic check that status is handled on exclusion windows"""
-    logger.info("test_status_for_trimmed_windows: start")
+    logger.info("test_status_for_exclusion_windows: start")
     
     result = add_exclusion_intervals(
         master_df=sample_ictal,
-        postictal_time=1000,
-        sph=100,
-        sop=900
+        postictal_time=1000
     )
     
     exclusion_rows = result[result["label"].str.startswith("x")]
     assert not exclusion_rows.empty
-    logger.info("test_status_for_trimmed_windows: passed")
+    logger.info("test_status_for_exclusion_windows: passed")

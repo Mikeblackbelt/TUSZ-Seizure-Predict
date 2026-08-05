@@ -5,7 +5,7 @@ import sys
 import os
 import json
 from pathlib import Path
-
+from pipeline.recording_info import get_recording_info
 from pipeline import preictal_segment
 from util import handle_logs, verify_data
 from util.handle_logs import load_config, save_config
@@ -86,22 +86,22 @@ def main():
 
     LOGGER.info(f"User selected tags: {selected_tags}")
 
-    # Timing parameters (SPH and SOP)
-    sph = float(
+    # Timing parameters (SOP and SPH)
+    sop = float(
         questionary.text(
-            "(SOP) Seizure Occurrence Period / Buffer (seconds):", 
+            "SOP - buffer/safety clearance before seizure onset (seconds):",
             default="120"
         ).ask()
     )
-    LOGGER.info(f"SOP buffer: {sph}s")
+    LOGGER.info(f"SOP buffer: {sop}s")
 
-    sop = float(
+    sph = float(
         questionary.text(
-            "(SOP + SPH) / Preictal duration (seconds):", 
+            "SPH - preictal window length to extract (seconds):",
             default="420"
         ).ask()
     )
-    LOGGER.info(f"SOP duration: {sop}s")
+    LOGGER.info(f"SPH preictal duration: {sph}s")
 
     # Optional Exclusion Intervals (Postictal)
     use_exclusions = questionary.confirm(
@@ -139,7 +139,7 @@ def main():
     # Add preictal tags
     LOGGER.info("Adding preictal tags...")
     master_df = preictal_segment.add_preictal_tags(
-        master_df, start_cutoff=sph, max_duration=sop
+        master_df, sph=sph, sop=sop, postictal_time=post_time
     )
 
     # Optional Exclusion Intervals
@@ -148,13 +148,21 @@ def main():
         master_df = preictal_segment.add_exclusion_intervals(
             master_df=master_df,
             postictal_time=post_time,
-            sph=sph,
-            sop=sop,
         )
 
+    LOGGER.info("Computing recording durations...")
+    recording_durations = {}
+    for edf_path in master_df["edf_path"].unique():
+        info = get_recording_info(edf_path)
+        recording_durations[edf_path] = info["n_times"] / info["sfreq"]
+
+    LOGGER.info("Adding interictal tags...")
+    master_df = preictal_segment.add_interictal_tags(
+        master_df, recording_durations
+    )
     # Save result
     master_df.to_csv(new_master_path, index=False)
-   
+    
     LOGGER.info("-" * 60)
     LOGGER.info(f"Pipeline complete - output at {new_master_path}")
     LOGGER.info(f"Output saved to: {new_master_path} ({len(master_df)} rows)")

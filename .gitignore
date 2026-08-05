@@ -7,6 +7,7 @@ train
 train 
 raweeg_output
 bipolar_montages
+master_full.csv
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
