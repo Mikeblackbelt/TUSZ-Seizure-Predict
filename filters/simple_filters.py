@@ -2,6 +2,68 @@ import mne
 import numpy as np
 from scipy.signal import butter, sosfiltfilt
 
+def bandpass_filter_raw(raw, low_cutoff=0.5, high_cutoff=40.0, order=4, picks=None):
+    """
+    Apply a zero-phase Butterworth bandpass filter to an entire preloaded
+    Raw object, in place, across the whole recording (no interval/padding
+    logic - used for whole-file preprocessing rather than windowed
+    filtering around a specific event).
+
+    Parameters
+    ----------
+    raw : mne.io.Raw
+        Preloaded Raw object (raw.preload must be True). Data is filtered
+        and written back into the object.
+    low_cutoff : float, default=0.5
+        High-pass cutoff frequency in Hz.
+    high_cutoff : float, default=40.0
+        Low-pass cutoff frequency in Hz.
+    order : int, default=4
+        Butterworth filter order for each filter stage.
+    picks : list[int] or None
+        Channel indices to filter. Defaults to all channels in `raw`.
+
+    Returns
+    -------
+    mne.io.Raw
+        The same Raw object, filtered in place.
+
+    Raises
+    ------
+    ValueError
+        If the cutoff frequencies are invalid relative to the Nyquist
+        frequency, or if `raw` is not preloaded.
+    """
+    if not raw.preload:
+        raise ValueError(
+            "raw must be preloaded (mne.io.read_raw_edf(..., preload=True)) "
+            "before filtering - filtering needs a writable in-memory array"
+        )
+
+    fs = raw.info["sfreq"]
+    nyquist = fs / 2
+
+    if low_cutoff <= 0:
+        raise ValueError(f"low_cutoff must be > 0, got {low_cutoff}")
+    if high_cutoff >= nyquist:
+        raise ValueError(f"high_cutoff must be < Nyquist ({nyquist} Hz), got {high_cutoff}")
+    if low_cutoff >= high_cutoff:
+        raise ValueError(f"low_cutoff ({low_cutoff}) must be < high_cutoff ({high_cutoff})")
+
+    sos_high = butter(order, low_cutoff, btype="high", fs=fs, output="sos")
+    sos_low = butter(order, high_cutoff, btype="low", fs=fs, output="sos")
+
+    data = raw._data
+    target_idx = picks if picks is not None else range(data.shape[0])
+
+    for ch_idx in target_idx:
+        filtered = sosfiltfilt(sos_high, data[ch_idx])
+        filtered = sosfiltfilt(sos_low, filtered)
+        data[ch_idx] = filtered
+
+    return raw
+
+
 def bandpass_filter_interval(edf_path, t1, t2, target_pattern_fn, low_cutoff=0.5, high_cutoff=40.0, pad_sec=5, order=4):
     """
     Apply a Butterworth bandpass filter to selected channels over a time interval.
