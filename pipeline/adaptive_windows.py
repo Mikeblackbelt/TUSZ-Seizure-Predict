@@ -1,75 +1,132 @@
+import json
 import numpy as np
+import pandas as pd
+from pathlib import Path
+from util import handle_logs
+
+logger = handle_logs.get_logger("window_extraction", "applog")
+
+TARGET_SFREQ = 256  # must match raw_eeg_extraction.TARGET_SFREQ
 
 
-def do_overlap_np(original_seq, seg_len, overlap_len):
-    """Slices a 2D NumPy array [channels, seq_len] into fixed-size windows."""
-    res = []
-    step = seg_len - overlap_len
-    for i in range(0, original_seq.shape[1], step):
-        if original_seq.shape[1] - i < seg_len:
-            break
-        res.append(original_seq[:, i : (i + seg_len)])
-    return res
+def build_edf_to_session_map(sessions):
+    """sessions: dict[session_key] -> {"edf_paths": [...]}, from index_sessions()."""
+    mapping = {}
+    for session_key, session in sessions.items():
+        for edf_path in session["edf_paths"]:
+            mapping[edf_path] = session_key
+    return mapping
 
 
-def get_adaptive_windows_npy(
-    pre_files, inter_files, seg_time=4, sfreq=256, overlap=True
-):
-    """Loads pre-ictal and inter-ictal .npy files and applies adaptive sliding windows.
+def load_session_data(session_key, output_dir):
+    """
+    Load the concatenated raw array and its per-file offsets for a session.
 
-    Args:
-        pre_files (list of str): File paths to pre-ictal .npy files [channels,
-          time_samples]
-        inter_files (list of str): File paths to inter-ictal .npy files
-          [channels, time_samples]
-        seg_time (float/int): Window size in seconds (default: 4s)
-        sfreq (int): Sampling frequency in Hz (default: 256Hz)
-        overlap (bool): Whether to use dynamic overlap on pre-ictal data
+    ASSUMPTION: save_checkpoint() writes "{session_key}_raw.npy" and
+    save_offsets() writes "{session_key}_offsets.json" containing the
+    file_offsets list as-is. Adjust the two paths below if your actual
+    util.handle_logs implementations name/serialize things differently.
+    """
+    combined = np.load(Path(output_dir) / f"{session_key}_raw.npy")
+    with open(Path(output_dir) / f"{session_key}_offsets.json") as f:
+        offsets = json.load(f)
+    return combined, {o["edf_path"]: o for o in offsets}
+
+
+def time_to_sample(t, offset, target_sfreq=TARGET_SFREQ):
+    """
+    Map a within-file time (seconds, relative to that edf's own start - the
+    same convention make_master_file()/add_preictal_tags() use) to a sample
+    index in the session's concatenated array. Clipped to the file's own
+    [start_sample, end_sample) span so per-file resample rounding can never
+    spill a window into the neighboring file's samples.
+    """
+    sample = offset["start_sample"] + round(t * target_sfreq)
+    return min(max(sample, offset["start_sample"]), offset["end_sample"])
+
+
+def extract_windows(master_df, sessions, output_dir, label_filter=None,
+                     status_filter=None, dedup_channels=True):
+    """
+    Slice labeled windows out of per-session concatenated .npy arrays using
+    the time annotations in master_df (e.g. master_full.csv).
+
+    Parameters:
+        master_df: rows already filtered/loaded from master_full.csv.
+        sessions: dict from index_sessions(), used to map edf_path -> session_key.
+        output_dir: dir containing "{session_key}_raw.npy" + offsets.
+        label_filter: optional iterable of exact label values to keep.
+        status_filter: optional iterable of status values to keep - e.g.
+            [2] for interictal, [1] for valid preictal/sopbuffer. Passing
+            status=0 rows here would slice real-width windows that were
+            explicitly dropped as non-viable - almost certainly not what
+            you want for training data.
+        dedup_channels: if True (default), collapse rows that share the
+            same (edf_path, start_time, stop_time, label) - i.e. the same
+            window annotated once per channel - into a single full-channel
+            extraction. If False, slice once per row (still full-channel;
+            `channel` is carried through as metadata either way since the
+            array itself is never split by channel here).
 
     Returns:
-        segments_inter_no_overlap (list of np.ndarray): Non-overlapping
-        inter-ictal windows
-        segments_pre_overlap (list of np.ndarray): Adaptively overlapped
-        pre-ictal windows
+        list of dicts: {"window": np.ndarray (N_TARGET_CHANNELS, n_samples),
+                         "label": str, "status": int, "edf_path": str,
+                         "start_time": float, "stop_time": float,
+                         "channels": list[str]}
     """
-    seg_len = int(seg_time * sfreq)
+    df = master_df
+    if label_filter is not None:
+        df = df[df["label"].isin(label_filter)]
+    if status_filter is not None:
+        df = df[df["status"].isin(status_filter)]
 
-    segments_pre = [np.load(f) for f in pre_files]
-    segments_inter = [np.load(f) for f in inter_files]
-
-    total_len_pre = sum(arr.shape[1] for arr in segments_pre)
-    total_len_inter = sum(arr.shape[1] for arr in segments_inter)
-
-    if total_len_pre == 0 or total_len_inter == 0:
-        raise ValueError(
-            "Pre-ictal or inter-ictal data is empty. Check your file paths."
+    if dedup_channels:
+        grouped = (
+            df.groupby(["edf_path", "start_time", "stop_time", "label", "status"])["channel"]
+            .apply(list)
+            .reset_index()
+            .rename(columns={"channel": "channels"})
         )
+    else:
+        grouped = df.copy()
+        grouped["channels"] = grouped["channel"].apply(lambda c: [c])
 
-    # Compute dynamic step size to balance sample counts
-    step_for_overlap = int(seg_len / (total_len_inter / total_len_pre))
-    step_for_overlap = max(1, step_for_overlap)  # Prevent zero-division/infinite loop
+    edf_to_session = build_edf_to_session_map(sessions)
 
-    segments_pre_overlap = []
-    segments_inter_no_overlap = []
+    results = []
+    for edf_path, group in grouped.groupby("edf_path"):
+        session_key = edf_to_session.get(edf_path)
+        if session_key is None:
+            logger.warning(f"No session found for {edf_path} - skipping {len(group)} windows")
+            continue
 
-    # Extract windows
-    while segments_inter or segments_pre:
-        if segments_pre:
-            if overlap:
-                overlap_len = seg_len - step_for_overlap
-                segments_pre_overlap.extend(
-                    do_overlap_np(segments_pre[0], seg_len, overlap_len)
-                )
-            else:
-                segments_pre_overlap.extend(
-                    do_overlap_np(segments_pre[0], seg_len, 0)
-                )
-            segments_pre.pop(0)
+        try:
+            combined, offsets_by_edf = load_session_data(session_key, output_dir)
+        except FileNotFoundError as e:
+            logger.warning(f"Missing session data for {session_key}: {e} - skipping {len(group)} windows")
+            continue
 
-        if segments_inter:
-            segments_inter_no_overlap.extend(
-                do_overlap_np(segments_inter[0], seg_len, 0)
-            )
-            segments_inter.pop(0)
+        offset = offsets_by_edf.get(edf_path)
+        if offset is None:
+            logger.warning(f"No file offset recorded for {edf_path} in session {session_key} - skipping")
+            continue
 
-    return segments_inter_no_overlap, segments_pre_overlap
+        for _, row in group.iterrows():
+            start_sample = time_to_sample(row["start_time"], offset)
+            stop_sample = time_to_sample(row["stop_time"], offset)
+            if stop_sample <= start_sample:
+                logger.warning(f"Degenerate window for {edf_path} {row['label']} - skipping")
+                continue
+
+            results.append({
+                "window": combined[:, start_sample:stop_sample],
+                "label": row["label"],
+                "status": row["status"],
+                "edf_path": edf_path,
+                "start_time": row["start_time"],
+                "stop_time": row["stop_time"],
+                "channels": row["channels"],
+            })
+
+    logger.info(f"Extracted {len(results)} windows ({'deduped' if dedup_channels else 'per-row'})")
+    return results  
