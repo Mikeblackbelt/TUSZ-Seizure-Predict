@@ -431,13 +431,120 @@ class ConvNet(nn.Module):
 
         return y_hat
 
+
 class FocalLoss(nn.Module):
+    """Focal loss (Lin et al. 2017) -- down-weights easy/already-correct examples and
+    focuses gradient on hard/misclassified ones, which handles class imbalance more
+    gracefully than static class weights alone (less prone to overcorrecting into the
+    minority class, unlike a naive inverse-frequency weighted CrossEntropyLoss).
+
+    Parameters:
+        alpha: Optional per-class weight tensor (same role as CrossEntropyLoss's
+            `weight` -- e.g. a sqrt-inverse-frequency vector). None disables per-class
+            weighting and uses gamma-based focusing only.
+        gamma (float): Focusing parameter. 0 reduces to (weighted) cross-entropy;
+            higher values focus more aggressively on hard examples. 2.0 is the
+            standard default from the original paper.
+    """
+
     def __init__(self, alpha=None, gamma=2.0):
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma
 
     def forward(self, logits, targets):
+        """
+        Compute the focal loss for a batch of logits and integer class targets.
+
+        Parameters:
+            logits (torch.Tensor): Raw model outputs, shape (batch, n_classes).
+            targets (torch.Tensor): Integer class labels, shape (batch,).
+
+        Returns:
+            torch.Tensor: Scalar mean focal loss over the batch.
+        """
         ce = F.cross_entropy(logits, targets, weight=self.alpha, reduction='none')
         pt = torch.exp(-ce)
         return ((1 - pt) ** self.gamma * ce).mean()
+
+
+class ArtifactDetectionCNN_MultiChannel(nn.Module):
+    """Three-class artifact classifier that consumes raw multi-channel EEG windows
+    directly -- shape (batch, n_channels, win_len) -- instead of a single flattened
+    channel or hand-crafted features. Treating channels as Conv1d input channels
+    lets the network learn cross-channel/spatial patterns (e.g. an eye-movement
+    artifact showing up on frontal channels but not posterior ones) that a
+    single-channel-at-a-time pipeline discards entirely.
+
+    Pair with EEGDataset(..., raw=True) fed X.npy built by
+    tuar_data_builder.build_tuar_dataset's multi-channel windowing (3D X.npy), NOT
+    with hand-crafted features from feature_extraction.py.
+    """
+
+    def __init__(self, n_channels, win_len):
+        """
+        Initialize the multi-channel CNN.
+
+        Parameters:
+            n_channels (int): Number of input channels (length of the canonical
+                channel set used to build the dataset).
+            win_len (int): Number of samples per window.
+        """
+        super().__init__()
+        self.conv1 = nn.Conv1d(n_channels, 32, kernel_size=7, padding=3)
+        self.bn1 = nn.BatchNorm1d(32)
+        self.pool1 = nn.MaxPool1d(kernel_size=2)
+
+        self.conv2 = nn.Conv1d(32, 64, kernel_size=5, padding=2)
+        self.bn2 = nn.BatchNorm1d(64)
+        self.pool2 = nn.MaxPool1d(kernel_size=2)
+
+        self.conv3 = nn.Conv1d(64, 128, kernel_size=3, padding=1)
+        self.bn3 = nn.BatchNorm1d(128)
+        self.pool3 = nn.MaxPool1d(kernel_size=2)
+
+        self.flatten_dim = self._get_flatten_dim(n_channels, win_len)
+
+        self.fc1 = nn.Linear(self.flatten_dim, 128)
+        self.dropout = nn.Dropout(0.4)
+        self.fc2 = nn.Linear(128, 64)
+        self.fc3 = nn.Linear(64, 3)
+
+    def _get_flatten_dim(self, n_channels, win_len):
+        """
+        Determine the flattened feature size produced by the convolutional layers.
+
+        Parameters:
+            n_channels (int): Number of input channels.
+            win_len (int): Length of each input window.
+
+        Returns:
+            int: Number of features after the convolutional and pooling layers.
+        """
+        x = torch.zeros(1, n_channels, win_len)
+        x = self.pool1(self.bn1(self.conv1(x)))
+        x = self.pool2(self.bn2(self.conv2(x)))
+        x = self.pool3(self.bn3(self.conv3(x)))
+        return x.numel()
+
+    def forward(self, x):
+        """
+        Classify a batch of raw multi-channel EEG windows.
+
+        Parameters:
+            x (torch.Tensor): Input tensor shaped (batch, n_channels, win_len).
+                Unlike ArtifactDetectionCNN, no channel dimension is inserted here --
+                the channels are already real EEG channels, not an artificial
+                single-channel placeholder.
+
+        Returns:
+            torch.Tensor: Raw classification logits shaped (batch, 3).
+        """
+        x = self.pool1(F.relu(self.bn1(self.conv1(x))))
+        x = self.pool2(F.relu(self.bn2(self.conv2(x))))
+        x = self.pool3(F.relu(self.bn3(self.conv3(x))))
+        x = x.view(x.size(0), -1)
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = F.relu(self.fc2(x))
+        return self.fc3(x)

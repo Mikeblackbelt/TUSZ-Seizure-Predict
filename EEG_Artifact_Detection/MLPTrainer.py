@@ -16,14 +16,13 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from sklearn.decomposition import PCA, IncrementalPCA, FastICA
 from sklearn.preprocessing import StandardScaler
-from models import ArtifactDetectionNN,ArtifactDetectionCNN,ConvNet
+from models import ArtifactDetectionNN, ArtifactDetectionCNN, ConvNet, ArtifactDetectionCNN_MultiChannel, FocalLoss
 from dataset import EEGDataset
 from datanoise_combiner import DataNoiseCombiner
 from utils import calculate_metrics, setup_logging, EarlyStopping
 import numpy as np
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
-from models import ArtifactDetectionNN, ArtifactDetectionCNN, ConvNet, FocalLoss
 
 run_datetime = datetime.datetime.now()
 plt.rcParams.update({'font.size': 14})
@@ -73,8 +72,7 @@ class MLPTrainer:
         self._init_training_components()
         self._init_metrics()
         self._epoch_durations = []
-        self.optimizer = optim.Adam(self.model.parameters(), lr=self.config.learning_rate)
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
+
     # ------------------------------------------------------------------ #
     # Logging helpers
     # ------------------------------------------------------------------ #
@@ -129,6 +127,20 @@ class MLPTrainer:
                      f"epochs={self.config.num_epochs}, batch_size={self.config.batch_size}, "
                      f"pca={self.config.pca}, ica={self.config.ica}")
 
+    def _uses_raw_input(self):
+        """
+        Whether the configured model consumes raw signal directly rather than
+        hand-crafted features. CNN/SincNet are convolutional and meant to learn their
+        own filters from signal; feeding them extract_features() output defeats that.
+        CNN_Multi additionally expects 3D (n_channels, win_len) raw multi-channel
+        windows, which extract_features() cannot process at all (it assumes 1D
+        per-window signals).
+
+        Returns:
+            bool: True for 'CNN', 'SincNet', and 'CNN_Multi'; False for 'MLP'.
+        """
+        return self.config.model in ('CNN', 'SincNet', 'CNN_Multi')
+
     def _init_data_combiner(self):
         """Initialize the data noise combiner using the trainer configuration."""
         with self._log_step("Combining/generating noised data"):
@@ -138,32 +150,33 @@ class MLPTrainer:
         """
         Load the training, validation, and SNR-specific test datasets from the configured data directory.
         """
+        raw = self._uses_raw_input()
         with self._log_step("Loading train dataset"):
-            self.train_dataset = EEGDataset(Path(self.config.datapath) / "train", raw=(self.config.model in ('CNN', 'SincNet')))
+            self.train_dataset = EEGDataset(Path(self.config.datapath) / "train", raw=raw)
         logging.info(f"Train dataset: {len(self.train_dataset):,} windows")
 
         with self._log_step("Loading validation dataset"):
-            self.val_dataset = EEGDataset(Path(self.config.datapath) / "val", raw=(self.config.model in ('CNN', 'SincNet')))
+            self.val_dataset = EEGDataset(Path(self.config.datapath) / "val", raw=raw)
         logging.info(f"Validation dataset: {len(self.val_dataset):,} windows")
 
         with self._log_step("Loading test datasets (all SNRs)"):
-            self.test_datasets = self._load_test_datasets(Path(self.config.datapath) / "test", raw=(self.config.model in ('CNN', 'SincNet')))
+            self.test_datasets = self._load_test_datasets(Path(self.config.datapath) / "test")
         total_test = sum(len(d) for d in self.test_datasets.values())
         logging.info(f"Test datasets: {len(self.test_datasets)} SNR levels, "
                      f"{total_test:,} windows total")
 
-    def _load_test_datasets(self, test_dir, raw=False):
+    def _load_test_datasets(self, test_dir):
         """
         Load test datasets keyed by SNR strings extracted from subdirectory names.
         
         Parameters:
         	test_dir (Path): Directory containing one subdirectory for each test SNR.
-        	raw (bool): Whether to use raw features without preprocessing.
         
         Returns:
         	dict: Mapping of SNR strings to their corresponding EEG datasets.
         """
         test_datasets = {}
+        raw = self._uses_raw_input()
         snr_dirs = [d for d in test_dir.iterdir() if d.is_dir()]
         for snr_dir in tqdm(snr_dirs, desc="Loading test SNR folders", unit="snr"):
             snr_value = snr_dir.name.split(' ')[-1]
@@ -173,36 +186,55 @@ class MLPTrainer:
 
     def _setup_preprocessing(self):
         """Prepare training and test features using the configured preprocessing artifacts."""
+        if self.config.model == 'CNN_Multi':
+            # Multi-channel windows are already z-scored per-channel per-window in
+            # tuar_data_builder.window_and_label_multichannel, and are 3D
+            # (n_windows, n_channels, win_len) -- StandardScaler/PCA only accept 2D
+            # input, so skip sklearn preprocessing entirely for this model.
+            logging.info("Skipping StandardScaler/PCA for CNN_Multi (3D raw multi-channel input)")
+            return
         if self.config.mode == 'train':
             self._preprocess_data()
         self._load_preprocessing()
 
     def _init_model(self):
         """Initialize the configured artifact-detection model on the selected device."""
-        feature_size = next(iter(self.test_datasets.values())).features.shape[1]
-        print(f'Feature shape: {feature_size}')
-        logging.info(f"Feature size: {feature_size}")
-        if self.config.model == 'MLP':
-            self.model = ArtifactDetectionNN(feature_size).to(self.device)
-        elif self.config.model == 'CNN':
-            self.model = ArtifactDetectionCNN(feature_size).to(self.device)
-        elif self.config.model == 'SincNet':
-            self.model = ConvNet(sr=256,min_band_hz=1,kernel_mult=3.903).to(self.device)
+        if self.config.model == 'CNN_Multi':
+            sample_shape = next(iter(self.test_datasets.values())).features.shape
+            n_channels, win_len = sample_shape[1], sample_shape[2]
+            print(f'Multi-channel input shape: ({n_channels} channels, {win_len} samples)')
+            logging.info(f"Multi-channel input: {n_channels} channels x {win_len} samples")
+            self.model = ArtifactDetectionCNN_MultiChannel(n_channels, win_len).to(self.device)
+        else:
+            feature_size = next(iter(self.test_datasets.values())).features.shape[1]
+            print(f'Feature shape: {feature_size}')
+            logging.info(f"Feature size: {feature_size}")
+            if self.config.model == 'MLP':
+                self.model = ArtifactDetectionNN(feature_size).to(self.device)
+            elif self.config.model == 'CNN':
+                self.model = ArtifactDetectionCNN(feature_size).to(self.device)
+            elif self.config.model == 'SincNet':
+                self.model = ConvNet(sr=256, min_band_hz=1, kernel_mult=3.903).to(self.device)
         n_params = sum(p.numel() for p in self.model.parameters())
         logging.info(f"Model: {self.config.model}, {n_params:,} parameters")
 
     def _init_training_components(self):
+        """Initialize the loss function, optimizer, early-stopping handler, and training data loaders."""
         counts = np.bincount(self.train_dataset.labels.astype(int), minlength=3).astype(np.float64)
+        # sqrt-inverse-frequency: gentler than raw inverse frequency at high imbalance
+        # ratios, so the minority class (EOG) doesn't get over-boosted at the expense
+        # of the other two -- see run-to-run comparison in project notes.
         weights = np.sqrt(counts.sum() / (len(counts) * counts))
         weights = weights / weights.mean()
         class_weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
         self.criterion = FocalLoss(alpha=class_weights, gamma=2.0)
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.config.learning_rate)
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.5, patience=5)
         self.early_stopping = EarlyStopping(patience=self.config.patience, min_delta=0)
         self.train_loader, self.val_loader = self._split_dataset()
         logging.info(f"Class counts: {counts.tolist()}, class weights: {weights.tolist()}")
         logging.info(f"Train batches/epoch: {len(self.train_loader):,}, "
-                    f"Val batches/epoch: {len(self.val_loader):,}")
+                     f"Val batches/epoch: {len(self.val_loader):,}")
 
     def _init_metrics(self):
         """

@@ -1,14 +1,34 @@
-"""TUAR dataset builder helpers for EEG_Artifact_Detection."""
+"""TUAR dataset builder helpers for EEG_Artifact_Detection.
+
+This version builds MULTI-CHANNEL windows: instead of treating each channel as an
+independent single-channel sample (discarding cross-channel/spatial information),
+it aligns each file to a shared "canonical" channel set and produces windows shaped
+(n_channels, win_len). The canonical channel set is auto-discovered by scanning EDF
+headers across the corpus rather than hardcoded, so it adapts to whatever montage(s)
+your TUAR files actually use.
+
+BREAKING CHANGE from the single-channel version: X.npy is now 3D
+(n_windows, n_channels, win_len) instead of 2D (n_windows, win_len). Any existing
+data/train, data/val, data/test built with the old pipeline must be rebuilt --
+they are not shape-compatible with this version. dataset.py and models.py were
+updated alongside this file to consume the new shape (see EEGDataset(raw=True)
+and ArtifactDetectionCNN_MultiChannel).
+
+Only .edf files are usable with multi-channel building: .npy files carry no channel
+names, so there's nothing to align them against. They are skipped with a warning.
+"""
 import csv
 import difflib
 import logging
 import os
 import re
 import tempfile
+from collections import Counter
 from fractions import Fraction
 
 import numpy as np
 from scipy.signal import firwin, filtfilt, resample_poly
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -41,12 +61,14 @@ _montage_file_index = None
 _PATIENT_ID_RE = re.compile(r"^[0-9a-z]{8}$")
 
 
-def load_eeg_file(path, fallback_fs):
+def load_eeg_file(path, fallback_fs, preload=True):
     ext = os.path.splitext(path)[1].lower()
     if ext == ".edf":
         import mne
 
-        raw = mne.io.read_raw_edf(path, preload=True, verbose=False)
+        raw = mne.io.read_raw_edf(path, preload=preload, verbose=False)
+        if not preload:
+            return None, float(raw.info["sfreq"]), list(raw.ch_names)
         data = raw.get_data().astype(WINDOW_DTYPE)
         fs = float(raw.info["sfreq"])
         return data, fs, list(raw.ch_names)
@@ -170,26 +192,6 @@ def guess_bipolar_split(name):
     return parts[0].strip(), parts[1].strip()
 
 
-def build_derived_bipolar_channels(data, channel_names, derivations):
-    norm_lookup = {normalize_channel_name(n): i for i, n in enumerate(channel_names)}
-    norm_keys = list(norm_lookup.keys())
-
-    def resolve(raw_name):
-        norm = normalize_channel_name(raw_name)
-        if norm in norm_lookup:
-            return norm_lookup[norm]
-        close = difflib.get_close_matches(norm, norm_keys, n=1, cutoff=0.8)
-        return norm_lookup[close[0]] if close else None
-
-    derived = {}
-    for name, ch_a_raw, ch_b_raw in derivations:
-        idx_a, idx_b = resolve(ch_a_raw), resolve(ch_b_raw)
-        if idx_a is None or idx_b is None:
-            continue
-        derived[name] = data[idx_a] - data[idx_b]
-    return derived
-
-
 def find_all_files(folder):
     matches = []
     for root, _dirs, files in os.walk(folder):
@@ -242,17 +244,116 @@ def coverage_masks_per_class(events, fs, n_samples):
     return masks
 
 
-def window_and_label(signal, class_masks, win_len, label_threshold):
-    n_samples = len(signal)
+# --------------------------------------------------------------------------- #
+# Canonical channel discovery
+# --------------------------------------------------------------------------- #
+
+def discover_canonical_channels(files, min_presence_frac=0.6, max_channels=19, scan_limit=None):
+    """
+    Scan EDF headers (no signal data loaded -- preload=False, so this is cheap even
+    across a large corpus) to find a fixed channel set common across files, instead
+    of hardcoding a montage. Windows are later built against this discovered set so
+    every file's window has the same (n_channels, win_len) shape and channel order.
+
+    Parameters:
+        files: Candidate file paths (from find_all_files). .npy files are skipped --
+            they carry no channel names, so they can't be aligned to a canonical set.
+        min_presence_frac (float): A channel must appear in at least this fraction of
+            scanned EDF files to be included. Lower this if your corpus uses several
+            inconsistent montages and too few channels survive; raise it if you want
+            a stricter, more universally-present set.
+        max_channels (int): Upper bound on how many channels to keep, most-common first.
+        scan_limit (int or None): If set, only scan the first N eligible files rather
+            than the whole corpus -- a representative sample is normally enough and
+            keeps this step fast on very large corpora.
+
+    Returns:
+        list[str]: Normalized channel names (see normalize_channel_name), ordered by
+        descending presence count, capped at max_channels.
+
+    Raises:
+        RuntimeError: If no EDF headers could be read at all.
+    """
+    import mne
+
+    edf_files = [f for f in files if os.path.splitext(f)[1].lower() == ".edf"]
+    if scan_limit is not None:
+        edf_files = edf_files[:scan_limit]
+
+    counts = Counter()
+    n_scanned = 0
+    for path in tqdm(edf_files, desc="Scanning channel headers", unit="file"):
+        try:
+            raw = mne.io.read_raw_edf(path, preload=False, verbose=False)
+        except Exception as exc:
+            logger.debug("Could not read header for %s: %s", path, exc)
+            continue
+        norm_names = {normalize_channel_name(n) for n in raw.ch_names}
+        counts.update(norm_names)
+        n_scanned += 1
+
+    if n_scanned == 0:
+        raise RuntimeError(
+            "No readable EDF headers found under the given files -- cannot discover "
+            "canonical channels. Check --tuar-path points at a folder containing .edf files."
+        )
+
+    min_count = max(1, int(round(min_presence_frac * n_scanned)))
+    candidates = [(name, c) for name, c in counts.items() if c >= min_count]
+    candidates.sort(key=lambda item: (-item[1], item[0]))
+    canonical = [name for name, _ in candidates[:max_channels]]
+
+    logger.info(
+        "Scanned %d/%d EDF headers; %d distinct channel names seen; %d present in "
+        ">= %.0f%% of scanned files",
+        n_scanned, len(edf_files), len(counts), len(candidates), min_presence_frac * 100,
+    )
+    logger.info("Canonical channel set (%d channels): %s", len(canonical), canonical)
+    if len(canonical) < 4:
+        logger.warning(
+            "Only %d canonical channels found (threshold %.0f%%) -- your corpus may use "
+            "several inconsistent montages. Consider lowering --min-channel-frac.",
+            len(canonical), min_presence_frac * 100,
+        )
+    return canonical
+
+
+# --------------------------------------------------------------------------- #
+# Multi-channel windowing
+# --------------------------------------------------------------------------- #
+
+def window_and_label_multichannel(signal_matrix, class_masks_per_channel, win_len, label_threshold):
+    """
+    Window an aligned multi-channel signal and label each window.
+
+    Parameters:
+        signal_matrix (np.ndarray): Shape (n_channels, n_samples), already resampled,
+            filtered, and in canonical-channel order (see process_file_multichannel).
+        class_masks_per_channel (list[dict]): One {CLASS_EOG: bool_array, CLASS_EMG:
+            bool_array} per channel, same length/order as signal_matrix's first axis.
+        win_len (int): Window length in samples.
+        label_threshold (float): Minimum per-class coverage fraction (see below) for a
+            window to be labeled that class.
+
+    A window's artifact coverage is taken as the MAX across channels, not the mean --
+    artifacts like eye movements are often localized to a few channels (e.g. frontal),
+    so requiring the whole multi-channel window to average past the threshold would
+    systematically under-label real, channel-localized artifacts.
+
+    Returns:
+        tuple: (X, y) where X has shape (n_windows, n_channels, win_len) and y has
+        shape (n_windows,).
+    """
+    n_channels, n_samples = signal_matrix.shape
     n_windows = n_samples // win_len
-    X = np.empty((n_windows, win_len), dtype=WINDOW_DTYPE)
+    X = np.empty((n_windows, n_channels, win_len), dtype=WINDOW_DTYPE)
     y = np.empty(n_windows, dtype=np.int64)
 
     for i in range(n_windows):
         start, end = i * win_len, (i + 1) * win_len
-        seg = signal[start:end]
-        cov_eog = class_masks[CLASS_EOG][start:end].mean()
-        cov_emg = class_masks[CLASS_EMG][start:end].mean()
+
+        cov_eog = max(m[CLASS_EOG][start:end].mean() for m in class_masks_per_channel)
+        cov_emg = max(m[CLASS_EMG][start:end].mean() for m in class_masks_per_channel)
 
         if cov_eog < label_threshold and cov_emg < label_threshold:
             label = CLASS_CLEAN
@@ -261,72 +362,110 @@ def window_and_label(signal, class_masks, win_len, label_threshold):
         else:
             label = CLASS_EMG
 
-        std = seg.std()
-        X[i] = (seg - seg.mean()) / std if std > 1e-12 else np.zeros_like(seg, dtype=WINDOW_DTYPE)
+        seg = signal_matrix[:, start:end]
+        mean = seg.mean(axis=1, keepdims=True)
+        std = seg.std(axis=1, keepdims=True)
+        X[i] = np.divide(seg - mean, std, out=np.zeros_like(seg), where=std > 1e-12)
         y[i] = label
 
     return X, y
 
 
-def process_file(path, fallback_fs, montage_dir, win_len, label_threshold):
+def process_file_multichannel(path, fallback_fs, montage_dir, win_len, label_threshold, canonical_channels):
+    """
+    Build an aligned (n_channels, n_samples) matrix for one file against
+    `canonical_channels` (from discover_canonical_channels), then window and label it.
+
+    Any canonical channel missing from this particular file is zero-filled -- this is
+    a simplification, not a correction. If your corpus has substantial per-file channel
+    variation, prefer raising min_presence_frac / shrinking canonical_channels over
+    relying on zero-fill for a large fraction of channels (see discover_canonical_channels
+    docstring). .npy files are skipped: without channel names there's nothing to align.
+    """
+    if os.path.splitext(path)[1].lower() != ".edf":
+        logger.debug("Skipping %s: multi-channel builder requires named EDF channels", path)
+        return None
     try:
         data, fs, channel_names = load_eeg_file(path, fallback_fs)
     except Exception as exc:
         logger.warning("Skipping %s (failed to load: %s)", path, exc)
         return None
 
-    n_channels, _n_samples_orig = data.shape
-    if channel_names is None:
-        channel_names = [f"ch{ch}" for ch in range(n_channels)]
+    norm_lookup = {}
+    for i, name in enumerate(channel_names):
+        norm_lookup.setdefault(normalize_channel_name(name), i)
+
+    n_present = sum(1 for c in canonical_channels if c in norm_lookup)
+    if n_present == 0:
+        return None
 
     annotations, montage_filename = load_annotations(path)
-    channel_to_annot_name = match_annotation_channels(channel_names, list(annotations.keys()))
-    matched_annot_names = {v for v in channel_to_annot_name.values() if v is not None}
-    n_direct = len(matched_annot_names)
+    channel_to_annot = match_annotation_channels(channel_names, list(annotations.keys()))
 
-    X_parts, y_parts = [], []
-
-    for ch in range(n_channels):
-        annot_name = channel_to_annot_name.get(channel_names[ch])
-        events = annotations.get(annot_name, []) if annot_name else []
-        resampled = resample_channel(data[ch], fs, TARGET_FS)
+    filtered_channels = []
+    masks_per_channel = []
+    lengths = []
+    for canon_name in canonical_channels:
+        idx = norm_lookup.get(canon_name)
+        if idx is None:
+            filtered_channels.append(None)
+            masks_per_channel.append(None)
+            continue
+        resampled = resample_channel(data[idx], fs, TARGET_FS)
         filtered = bandpass_filter(resampled, fs=TARGET_FS)
-        class_masks = coverage_masks_per_class(events, TARGET_FS, len(filtered))
-        X_ch, y_ch = window_and_label(filtered, class_masks, win_len, label_threshold)
-        X_parts.append(X_ch)
-        y_parts.append(y_ch)
+        filtered_channels.append(filtered)
+        lengths.append(len(filtered))
+        annot_name = channel_to_annot.get(channel_names[idx])
+        events = annotations.get(annot_name, []) if annot_name else []
+        masks_per_channel.append(coverage_masks_per_class(events, TARGET_FS, len(filtered)))
 
-    unmatched = [name for name in annotations if name not in matched_annot_names]
-    n_bipolar_derived = 0
-    if unmatched:
-        derivations = []
-        if montage_filename:
-            montage_path = find_montage_file(montage_filename, os.path.dirname(path), montage_dir)
-            if montage_path:
-                wanted = set(unmatched)
-                derivations = [d for d in parse_montage_file(montage_path) if d[0] in wanted]
-        if not derivations:
-            for name in unmatched:
-                split = guess_bipolar_split(name)
-                if split:
-                    derivations.append((name, split[0], split[1]))
-        derived_signals = build_derived_bipolar_channels(data, channel_names, derivations)
-        n_bipolar_derived = len(derived_signals)
-        for name, sig in derived_signals.items():
-            resampled = resample_channel(sig, fs, TARGET_FS)
-            filtered = bandpass_filter(resampled, fs=TARGET_FS)
-            events = annotations.get(name, [])
-            class_masks = coverage_masks_per_class(events, TARGET_FS, len(filtered))
-            X_ch, y_ch = window_and_label(filtered, class_masks, win_len, label_threshold)
-            X_parts.append(X_ch)
-            y_parts.append(y_ch)
-
-    n_unmatched = len(unmatched) - n_bipolar_derived
-    match_stats = {"direct": n_direct, "bipolar_derived": n_bipolar_derived, "unmatched": n_unmatched}
-
-    if not X_parts:
+    if not lengths:
         return None
-    return np.concatenate(X_parts, axis=0), np.concatenate(y_parts, axis=0), match_stats
+    n_samples = min(lengths)
+
+    n_channels = len(canonical_channels)
+    signal_matrix = np.zeros((n_channels, n_samples), dtype=WINDOW_DTYPE)
+    aligned_masks = []
+    for i, filt in enumerate(filtered_channels):
+        if filt is not None:
+            signal_matrix[i] = filt[:n_samples]
+            aligned_masks.append({k: v[:n_samples] for k, v in masks_per_channel[i].items()})
+        else:
+            aligned_masks.append({
+                CLASS_EOG: np.zeros(n_samples, dtype=bool),
+                CLASS_EMG: np.zeros(n_samples, dtype=bool),
+            })
+
+    X, y = window_and_label_multichannel(signal_matrix, aligned_masks, win_len, label_threshold)
+    match_stats = {"direct": n_present, "bipolar_derived": 0, "unmatched": n_channels - n_present}
+    return X, y, match_stats
+
+
+def _save_array_chunked(out_path, src, chunk_rows=200_000):
+    """
+    Write `src` (a memmap or ndarray) to a .npy file at `out_path` in row-chunks,
+    instead of via a single np.save()/tofile() call.
+
+    np.save() on a large array eventually calls ndarray.tofile(), which issues one big
+    OS-level write. On Windows, very large single writes (multi-channel splits at
+    scale can easily exceed a gigabyte) can silently truncate -- the CRT/OS write layer
+    caps out mid-call rather than erroring cleanly or looping to finish, producing
+    "OSError: N requested and M written" with M well short of N. Writing in bounded
+    chunks via a destination memmap sidesteps this: each chunk assignment is a normal,
+    much smaller memory copy rather than one giant write syscall.
+
+    Parameters:
+        out_path (str): Destination .npy file path.
+        src: Source array (typically a np.memmap) to copy from.
+        chunk_rows (int): Number of rows (axis 0) to copy per iteration.
+    """
+    dest = np.lib.format.open_memmap(out_path, mode="w+", dtype=src.dtype, shape=src.shape)
+    n_rows = src.shape[0]
+    for start in range(0, n_rows, chunk_rows):
+        end = min(start + chunk_rows, n_rows)
+        dest[start:end] = src[start:end]
+    dest.flush()
+    del dest
 
 
 def get_patient_id(path):
@@ -358,12 +497,18 @@ def split_files_by_patient(files, val_frac, test_frac, seed):
     return train_files, val_files, test_files
 
 
-def build_split(files, fallback_fs, montage_dir, win_len, label_threshold, split_name, out_dir, max_windows=2000, seed=0, tmp_dir=None):
+def build_split(files, fallback_fs, montage_dir, win_len, label_threshold, split_name, out_dir,
+                 canonical_channels, max_windows=2000, seed=0, tmp_dir=None):
     """Walk `files` (shuffled first, so results don't depend on find_all_files's sort
-    order) and accumulate windows up to a PER-CLASS cap, not a raw total cap. A flat
-    total cap lets whichever files are processed first exhaust the quota before rarer
-    classes (e.g. EOG, ~2% of all TUAR windows) ever show up -- this stops as soon as
-    every class hits its share of max_windows, or all files are exhausted.
+    order) and accumulate multi-channel windows up to a PER-CLASS cap, not a raw total
+    cap. A flat total cap lets whichever files are processed first exhaust the quota
+    before rarer classes (e.g. EOG, a small share of all TUAR windows) ever show up --
+    this stops as soon as every class hits its share of max_windows, or all files are
+    exhausted.
+
+    canonical_channels: list of normalized channel names from discover_canonical_channels,
+    fixing the channel axis for every window in this split (and, since it should be
+    computed once across the whole corpus, across all splits too).
 
     out_dir: final destination directory for this split's X.npy/Y.npy. Written via
     np.save on the accumulation memmap directly (streamed, not a full in-RAM copy) --
@@ -381,6 +526,7 @@ def build_split(files, fallback_fs, montage_dir, win_len, label_threshold, split
     of leaving multi-GB orphans behind in tmp_dir. Returns a small dict of counts/stats
     only -- never the full window array -- to avoid ever holding a whole split in RAM.
     """
+    n_channels = len(canonical_channels)
     totals = {"direct": 0, "bipolar_derived": 0, "unmatched": 0}
     if max_windows is not None and max_windows < 0:
         max_windows = None
@@ -398,11 +544,11 @@ def build_split(files, fallback_fs, montage_dir, win_len, label_threshold, split
     y_path = os.path.join(temp_dir, "Y.dat")
     X_mem = None
     y_mem = None
-    X_all = None
-    y_all = None
+    X_view = None
+    y_view = None
 
     try:
-        X_mem = np.memmap(x_path, dtype=WINDOW_DTYPE, mode="w+", shape=(1, win_len))
+        X_mem = np.memmap(x_path, dtype=WINDOW_DTYPE, mode="w+", shape=(1, n_channels, win_len))
         y_mem = np.memmap(y_path, dtype=np.int64, mode="w+", shape=(1,))
 
         for i, path in enumerate(shuffled_files, 1):
@@ -411,7 +557,8 @@ def build_split(files, fallback_fs, montage_dir, win_len, label_threshold, split
                             split_name, per_class_cap, i - 1, len(shuffled_files))
                 break
             logger.info("[%s %d/%d] %s", split_name, i, len(shuffled_files), path)
-            result = process_file(path, fallback_fs, montage_dir, win_len, label_threshold)
+            result = process_file_multichannel(path, fallback_fs, montage_dir, win_len, label_threshold,
+                                                canonical_channels)
             if result is None:
                 continue
             X, y, match_stats = result
@@ -432,7 +579,7 @@ def build_split(files, fallback_fs, montage_dir, win_len, label_threshold, split
                 for label in (CLASS_CLEAN, CLASS_EOG, CLASS_EMG):
                     class_counts[label] += int((y == label).sum())
 
-            X_mem = np.memmap(x_path, dtype=WINDOW_DTYPE, mode="r+", shape=(n_windows + len(X), win_len))
+            X_mem = np.memmap(x_path, dtype=WINDOW_DTYPE, mode="r+", shape=(n_windows + len(X), n_channels, win_len))
             y_mem = np.memmap(y_path, dtype=np.int64, mode="r+", shape=(n_windows + len(y),))
             X_mem[n_windows:n_windows + len(X)] = X
             y_mem[n_windows:n_windows + len(y)] = y
@@ -451,36 +598,35 @@ def build_split(files, fallback_fs, montage_dir, win_len, label_threshold, split
         # MemoryError from np.array(memmap). Only after this completes do we delete the
         # temp files, in `finally` below.
         os.makedirs(out_dir, exist_ok=True)
-        X_view = np.memmap(x_path, dtype=WINDOW_DTYPE, mode="r", shape=(n_windows, win_len))
+        X_view = np.memmap(x_path, dtype=WINDOW_DTYPE, mode="r", shape=(n_windows, n_channels, win_len))
         y_view = np.memmap(y_path, dtype=np.int64, mode="r", shape=(n_windows,))
-        np.save(os.path.join(out_dir, "X.npy"), X_view)
-        np.save(os.path.join(out_dir, "Y.npy"), y_view)
+        _save_array_chunked(os.path.join(out_dir, "X.npy"), X_view)
+        _save_array_chunked(os.path.join(out_dir, "Y.npy"), y_view)
 
         counts = {c: int((y_view == c).sum()) for c in (CLASS_CLEAN, CLASS_EOG, CLASS_EMG)}
         logger.info(
-            "%s: %d windows -- clean=%d eog=%d emg=%d",
-            split_name, n_windows, counts[CLASS_CLEAN], counts[CLASS_EOG], counts[CLASS_EMG],
+            "%s: %d windows x %d channels -- clean=%d eog=%d emg=%d",
+            split_name, n_windows, n_channels, counts[CLASS_CLEAN], counts[CLASS_EOG], counts[CLASS_EMG],
         )
         n_seen = totals["direct"] + totals["bipolar_derived"] + totals["unmatched"]
         if n_seen:
             logger.info(
-                "%s: channel match -- direct=%d bipolar_derived=%d unmatched=%d (rate=%.4f)",
-                split_name, totals["direct"], totals["bipolar_derived"], totals["unmatched"],
+                "%s: canonical channel coverage -- present=%d missing(zero-filled)=%d (rate=%.4f missing)",
+                split_name, totals["direct"], totals["unmatched"],
                 totals["unmatched"] / n_seen,
             )
         logger.info("Wrote %s (%d windows)", out_dir, n_windows)
 
-        del X_view, y_view
         return {"n_windows": n_windows, "counts": counts, "totals": totals}
 
     finally:
-        for mem in (X_mem, y_mem):
+        for mem in (X_mem, y_mem, X_view, y_view):
             if mem is not None:
                 try:
                     mem.flush()
                 except Exception:
                     pass
-        del X_mem, y_mem
+        del X_mem, y_mem, X_view, y_view
         for p in (x_path, y_path):
             try:
                 if os.path.exists(p):
@@ -506,9 +652,15 @@ def save_split(datapath, subdir, X, y):
     logger.info("Wrote %s (%d windows)", out_dir, len(y))
 
 
-def build_tuar_dataset(tuar_path, out_datapath, fallback_fs, montage_dir, label_threshold, val_frac, test_frac, seed, max_windows=2000, tmp_dir=None):
+def build_tuar_dataset(tuar_path, out_datapath, fallback_fs, montage_dir, label_threshold, val_frac, test_frac,
+                        seed, max_windows=2000, tmp_dir=None, min_channel_frac=0.6, max_channels=19,
+                        channel_scan_limit=None):
     files = find_all_files(tuar_path)
     logger.info("Found %d file(s) under %s", len(files), tuar_path)
+
+    canonical_channels = discover_canonical_channels(
+        files, min_presence_frac=min_channel_frac, max_channels=max_channels, scan_limit=channel_scan_limit,
+    )
 
     train_files, val_files, test_files = split_files_by_patient(files, val_frac, test_frac, seed)
     logger.info(
@@ -520,14 +672,18 @@ def build_tuar_dataset(tuar_path, out_datapath, fallback_fs, montage_dir, label_
 
     win_len = int(round(WINDOW_SEC * TARGET_FS))
     train_stats = build_split(train_files, fallback_fs, montage_dir, win_len, label_threshold, "train",
-                               out_dir=os.path.join(out_datapath, "train"), max_windows=max_windows, seed=seed, tmp_dir=tmp_dir)
+                               out_dir=os.path.join(out_datapath, "train"), canonical_channels=canonical_channels,
+                               max_windows=max_windows, seed=seed, tmp_dir=tmp_dir)
     val_stats = build_split(val_files, fallback_fs, montage_dir, win_len, label_threshold, "val",
-                             out_dir=os.path.join(out_datapath, "val"), max_windows=max_windows, seed=seed, tmp_dir=tmp_dir)
+                             out_dir=os.path.join(out_datapath, "val"), canonical_channels=canonical_channels,
+                             max_windows=max_windows, seed=seed, tmp_dir=tmp_dir)
     test_stats = build_split(test_files, fallback_fs, montage_dir, win_len, label_threshold, "test",
-                              out_dir=os.path.join(out_datapath, "test", "0"), max_windows=max_windows, seed=seed, tmp_dir=tmp_dir)
+                              out_dir=os.path.join(out_datapath, "test", "0"), canonical_channels=canonical_channels,
+                              max_windows=max_windows, seed=seed, tmp_dir=tmp_dir)
 
     return {
         "files": files,
+        "canonical_channels": canonical_channels,
         "train_files": train_files,
         "val_files": val_files,
         "test_files": test_files,
