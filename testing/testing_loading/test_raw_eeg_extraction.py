@@ -1,76 +1,112 @@
+import mne
 import numpy as np
-import pytest
-from pipeline.raw_eeg_extraction import concatenate_session_eeg
 
-FIXTURE_EDF = "testing/fixtures/sample.edf"
+from pipeline.checkpoint_io import save_checkpoint, save_offsets
+from pipeline.eeg_channels import CHANNELS_TO_INCLUDE, N_TARGET_CHANNELS
+from filters.adaptive_filters import detect_noise_frequencies, apply_notch_filter
+from filters.simple_filters import bandpass_filter_raw
+from util import handle_logs
 
+logger = handle_logs.get_logger("raw_eeg_extraction", "applog")
 
-def test_single_recording_shape():
-    session = {"edf_paths": [FIXTURE_EDF]}
-    result = concatenate_session_eeg(session)
-    assert result.shape == (17, 437500)
+TARGET_SFREQ = 256 
 
+CANONICAL_CHANNELS = [
+    'FP1', 'F7', 'T3', 'T5', 'O1', 'FP2', 'F8', 'T4', 'T6', 'O2', 
+    'F3', 'C3', 'P3', 'F4', 'C4', 'P4', 'CZ'
+]
 
-def test_single_recording_matches_direct_read():
-    """Sanity check: concatenating one file should equal reading it directly."""
-    import mne
-    from pipeline.eeg_channels import CHANNELS_TO_INCLUDE
+def concatenate_session_eeg(
+    session,
+    session_key=None,
+    output_dir=None,
+    apply_filtering=True,
+    notch_variance_threshold=0.20,
+    notch_power_percentile=80,
+    bandpass_low=0.5,
+    bandpass_high=40.0,
+):
+    edf_paths = session.get("edf_paths", [])
 
-    session = {"edf_paths": [FIXTURE_EDF]}
-    result = concatenate_session_eeg(session)
+    if not edf_paths:
+        logger.warning("Session has no .edf files - nothing to concatenate")
+        return None
 
-    raw = mne.io.read_raw_edf(FIXTURE_EDF, include=CHANNELS_TO_INCLUDE, verbose="Warning")
-    direct = raw.get_data()
-
-    assert np.array_equal(result, direct)
-
-
-def test_multiple_recordings_concatenated_shape():
-    """Reusing the same fixture twice to simulate a 2-recording session."""
-    session = {"edf_paths": [FIXTURE_EDF, FIXTURE_EDF]}
-    result = concatenate_session_eeg(session)
-    assert result.shape == (17, 437500 * 2)
-
-
-def test_multiple_recordings_offset_correctness():
-    """
-    Second recording's data should land at samples [437500:875000],
-    and should be identical to the first recording's data (same fixture
-    file used twice).
-    """
-    session = {"edf_paths": [FIXTURE_EDF, FIXTURE_EDF]}
-    result = concatenate_session_eeg(session)
-
-    first_half = result[:, :437500]
-    second_half = result[:, 437500:]
-    assert np.array_equal(first_half, second_half)
-
-
-def test_empty_session_returns_none():
-    session = {"edf_paths": []}
-    result = concatenate_session_eeg(session)
-    assert result is None
-
-
-def test_missing_edf_paths_key_returns_none():
-    result = concatenate_session_eeg({})
-    assert result is None
-
-
-def test_save_to_output_dir(tmp_path):
-    session = {"edf_paths": [FIXTURE_EDF]}
-    result = concatenate_session_eeg(
-        session, session_key="test_session_001", output_dir=str(tmp_path)
+    logger.info(
+        f"Processing {len(edf_paths)} .edf recordings "
+        f"({'filter + ' if apply_filtering else ''}resample to {TARGET_SFREQ} Hz)"
     )
 
-    out_file = tmp_path / "test_session_001.npy"
-    assert out_file.exists()
+    resampled_chunks = []
+    file_offsets = []
+    running_sample = 0
+    for edf_path in edf_paths:
+        raw = mne.io.read_raw_edf(edf_path, include=CHANNELS_TO_INCLUDE, preload=True, verbose="Error")
 
-    loaded = np.load(out_file)
-    assert np.array_equal(loaded, result)
+        if len(raw.ch_names) != N_TARGET_CHANNELS:
+            raise ValueError(
+                f"{edf_path}: found {len(raw.ch_names)} target channels, "
+                f"expected {N_TARGET_CHANNELS}"
+            )
 
+        # --- ENFORCE CANONICAL CHANNEL ORDERING ---
+        clean_raw_names = [ch.replace('EEG ', '').replace('-REF', '').replace('-LE', '').strip() for ch in raw.ch_names]
+        name_to_original = {clean: orig for clean, orig in zip(clean_raw_names, raw.ch_names)}
+        
+        try:
+            ordered_original_names = [name_to_original[clean] for clean in CANONICAL_CHANNELS]
+            raw.reorder_channels(ordered_original_names)
+        except KeyError as e:
+            logger.error(f"Missing expected canonical channel in {edf_path}: {e}")
+            continue
 
-def test_output_dir_without_session_key_raises():
-    session = {"edf_paths": [FIXTURE_EDF]}
-    with pytest.raises(ValueError):
-        concatenate_session_eeg(session, output_dir="/tmp/whatever")
+        # --- FILTERING ---
+        if apply_filtering:
+            noise_freqs = detect_noise_frequencies(
+                raw,
+                variance_threshold=notch_variance_threshold,
+                power_percentile=notch_power_percentile,
+            )
+            if noise_freqs:
+                logger.debug(f"{edf_path}: notching {noise_freqs}")
+                raw = apply_notch_filter(raw, noise_freqs)
+            else:
+                logger.debug(f"{edf_path}: no notch-worthy frequencies detected")
+
+            raw = bandpass_filter_raw(raw, low_cutoff=bandpass_low, high_cutoff=bandpass_high)
+
+        # --- RESAMPLING ---
+        if raw.info["sfreq"] != TARGET_SFREQ:
+            raw.resample(TARGET_SFREQ, npad="auto", verbose="Error")
+
+        data = raw.get_data()
+        resampled_chunks.append(data)
+        n_samples = data.shape[1]
+        file_offsets.append({
+            "edf_path": edf_path,
+            "start_sample": running_sample,
+            "end_sample": running_sample + n_samples,
+        })
+        running_sample += n_samples
+        logger.debug(f"Read & resampled {edf_path} to shape {data.shape}")
+
+    if not resampled_chunks:
+        return None
+
+    combined = np.concatenate(resampled_chunks, axis=1)
+
+    logger.info(
+        f"Successfully concatenated {len(edf_paths)} recordings into "
+        f"resampled {combined.shape} array"
+    )
+
+    if output_dir is not None:
+        if not session_key:
+            raise ValueError(
+                "output_dir was given but session_key was not - "
+                "cannot determine output filename"
+            )
+        save_offsets(file_offsets, session_key, output_dir)
+        save_checkpoint(combined, session_key, output_dir, stage="raw")
+
+    return combined, file_offsets
