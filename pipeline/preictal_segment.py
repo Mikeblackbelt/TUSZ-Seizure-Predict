@@ -154,6 +154,59 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
     logger.info(f"Master file written to {output_path} with {len(master)} rows")
     return master
 
+def add_interictal_tags(master_df, recording_durations, min_interictal_length=0):
+    """
+    Add interictal (background) rows for gaps between existing labeled
+    windows, per (edf_path, channel).
+    Status=2 means valid interictal window. 
+    Parameters:
+        master_df (pd.DataFrame): master annotations, after preictal/
+            postictal/consecutive tagging.
+        recording_durations (dict): edf_path -> total recording duration (s).
+        min_interictal_length (float): minimum gap length to keep.
+
+    Returns:
+        pd.DataFrame with interictal rows added.
+    """
+    if master_df is None or master_df.empty:
+        raise ValueError("master_df cannot be None or empty")
+
+    new_rows = []
+    for (edf_path, channel), group in master_df.groupby(["edf_path", "channel"]):
+        duration = recording_durations.get(edf_path)
+        if duration is None:
+            logger.warning(f"No duration for {edf_path} - skipping interictal for this group")
+            continue
+
+        intervals = group.sort_values("start_time")[["start_time", "stop_time"]].values.tolist()
+
+        merged = [] 
+        for start, stop in intervals:
+            if merged and start <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], stop)
+            else:
+                merged.append([start, stop])
+
+        template = group.iloc[0].to_dict()
+        cursor = 0.0
+        for start, stop in merged:
+            gap = start - cursor
+            if gap > 0 and gap >= min_interictal_length:
+                new_rows.append({**template, "label": "interictal",
+                                "start_time": cursor, "stop_time": start, "status": 2})
+            cursor = max(cursor, stop)
+
+        trailing_gap = duration - cursor
+        if trailing_gap > 0 and trailing_gap >= min_interictal_length:
+            new_rows.append({**template, "label": "interictal",
+                            "start_time": cursor, "stop_time": duration, "status": 2})
+            
+    if not new_rows:
+        logger.warning("No interictal rows generated")
+        return master_df.copy()
+
+    result = pd.concat([master_df, pd.DataFrame(new_rows)], ignore_index=True)
+    return result.sort_values(["split", "edf_path", "channel", "start_time"]).reset_index(drop=True)
 
 def add_preictal_tags(master_df, sph, sop, postictal_time=None):
     """
@@ -171,7 +224,11 @@ def add_preictal_tags(master_df, sph, sop, postictal_time=None):
     partial/trimmed case: a seizure's preictal example is either the full
     required length (status=1) or entirely dropped (status=0, zeroed
     start_time/stop_time). This is a hard all-or-nothing rule - no window
-    is ever shortened to fit available space.
+    is ever shortened to fit available space. A dropped window has [0, j_start]
+    on a Gate 1 failure or [i_end, j_start] on a Gate 2
+    failure, so downstream logic (e.g. add_interictal_tags) correctly
+    treats that stretch as unusable/occupied time rather than as clean,
+    samplable background.
 
     Two independent hard gates determine whether a seizure's preictal
     window is viable at all:
@@ -251,8 +308,8 @@ def add_preictal_tags(master_df, sph, sop, postictal_time=None):
                 gate2_fail = gap < (postictal_time + sph + sop)
 
             if gate1_fail or gate2_fail:
-                preictal_start = 0.0
-                preictal_end = 0.0
+                preictal_start = 0.0 if gate1_fail else i_end
+                preictal_end = j_start
                 status = 0
                 reason = "gate1 (session start)" if gate1_fail else "gate2 (inter-seizure gap)"
                 logger.debug(
@@ -273,6 +330,15 @@ def add_preictal_tags(master_df, sph, sop, postictal_time=None):
                 "stop_time": preictal_end,
                 "status": status,
             })
+            # Always block the SOP buffer
+            if status == 1:
+                preictal_rows.append({
+                    **row.to_dict(),
+                    "label": f"p{row['label']}_sopbuffer",
+                    "start_time": j_start - sop,
+                    "stop_time": j_start,
+                    "status": 1,
+                })
 
     if status_counts[0]:
         logger.warning(
@@ -375,7 +441,7 @@ def resolve_overlaps(df: pd.DataFrame) -> pd.DataFrame:
     tell those apart, so running it over status=0 rows would silently
     collapse two distinct dropped seizures into one row. Real overlapping
     intervals (status != 0) don't have this ambiguity - they mean actual
-    time overlap, which is what this function is meant to resolve.
+    time overlap, which is what this    function is meant to resolve.
     """
     if df.empty:
         return df
@@ -386,6 +452,8 @@ def resolve_overlaps(df: pd.DataFrame) -> pd.DataFrame:
             return 3
         if lbl.startswith('p'):
             return 2
+        if lbl == 'interictal': 
+            return 0
         return 1
 
     df = df.copy()
@@ -395,17 +463,39 @@ def resolve_overlaps(df: pd.DataFrame) -> pd.DataFrame:
 
     active['priority'] = active['label'].apply(get_priority)
 
-    active = active.sort_values(
-        by=['edf_path', 'channel', 'start_time', 'priority'],
-        ascending=[True, True, True, False]
-    )
+    kept_rows = []
+    for (edf_path, channel), group in active.groupby(['edf_path', 'channel']):
+        group = group.sort_values(
+            ['priority', 'start_time'], ascending=[False, True]
+        )
+        placed = []  # accepted (start, stop) intervals for this group so far
 
-    active = active.drop_duplicates(
-        subset=['edf_path', 'channel', 'start_time', 'stop_time'],
-        keep='first'
-    )
+        for _, row in group.iterrows():
+            segments = [(row['start_time'], row['stop_time'])]
+            for (a_start, a_stop) in placed:
+                next_segments = []
+                for (s, e) in segments:
+                    if a_stop <= s or a_start >= e:
+                        next_segments.append((s, e))
+                        continue
+                    if a_start > s:
+                        next_segments.append((s, a_start))
+                    if a_stop < e:
+                        next_segments.append((a_stop, e))
+                segments = next_segments
 
-    active = active.drop(columns=['priority'])
+            for (s, e) in segments:
+                if e - s <= 0:
+                    continue
+                new_row = row.to_dict()
+                new_row['start_time'] = s
+                new_row['stop_time'] = e
+                kept_rows.append(new_row)
+                placed.append((s, e))
+
+    active = pd.DataFrame(kept_rows)
+    if not active.empty:
+        active = active.drop(columns=['priority'])
 
     df = pd.concat([active, dropped], ignore_index=True)
 

@@ -5,7 +5,7 @@ import sys
 import os
 import json
 from pathlib import Path
-
+from pipeline.recording_info import get_recording_info
 from pipeline import preictal_segment
 from util import handle_logs, verify_data
 from util.handle_logs import load_config, save_config
@@ -150,9 +150,19 @@ def main():
             postictal_time=post_time,
         )
 
+    LOGGER.info("Computing recording durations...")
+    recording_durations = {}
+    for edf_path in master_df["edf_path"].unique():
+        info = get_recording_info(edf_path)
+        recording_durations[edf_path] = info["n_times"] / info["sfreq"]
+
+    LOGGER.info("Adding interictal tags...")
+    master_df = preictal_segment.add_interictal_tags(
+        master_df, recording_durations
+    )
     # Save result
     master_df.to_csv(new_master_path, index=False)
-   
+    
     LOGGER.info("-" * 60)
     LOGGER.info(f"Pipeline complete - output at {new_master_path}")
     LOGGER.info(f"Output saved to: {new_master_path} ({len(master_df)} rows)")

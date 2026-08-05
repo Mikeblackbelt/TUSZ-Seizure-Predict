@@ -35,7 +35,7 @@ def sample_master():
 def test_preictal_row_count(sample_master):
     logger.info("test_preictal_row_count: start")
     result = add_preictal_tags(sample_master, sph=10, sop=50)
-    assert len(result) == len(sample_master) * 2
+    assert len(result) == len(sample_master) * 3
     logger.info("test_preictal_row_count: passed")
 
 
@@ -85,6 +85,21 @@ def test_preictal_gate1_session_start_failure(sample_master):
     assert pfnsz["status"] == 0
     logger.info("test_preictal_gate1_session_start_failure: passed")
 
+def test_preictal_gate1_session_start_failure(sample_master):
+    """
+    Gate 1: if start_time < sph + sop, the window can't fit before session
+    start at all - dropped, but kept as a real-width row [0, j_start] so
+    downstream interictal logic correctly treats it as occupied time.
+    """
+    logger.info("test_preictal_gate1_session_start_failure: start")
+    # row1: start=100, sph=10, sop=200 -> sph+sop=210 > 100 -> Gate 1 fails
+    result = add_preictal_tags(sample_master, sph=10, sop=200)
+    pfnsz = result[result["label"] == "pfnsz"].iloc[0]
+    assert pfnsz["start_time"] == 0.0
+    assert pfnsz["stop_time"] == 100.0  # == j_start
+    assert pfnsz["status"] == 0
+    logger.info("test_preictal_gate1_session_start_failure: passed")
+
 
 def test_preictal_gate1_uses_full_sph_plus_sop(sample_master):
     """
@@ -97,7 +112,7 @@ def test_preictal_gate1_uses_full_sph_plus_sop(sample_master):
     pfnsz = result[result["label"] == "pfnsz"].iloc[0]
     assert pfnsz["status"] == 0
     assert pfnsz["start_time"] == 0.0
-    assert pfnsz["stop_time"] == 0.0
+    assert pfnsz["stop_time"] == 100.0  # == j_start
     logger.info("test_preictal_gate1_uses_full_sph_plus_sop: passed")
 
 
@@ -105,8 +120,9 @@ def test_preictal_gate2_inter_seizure_gap_failure():
     """
     Gate 2: if the gap between the previous seizure's end and this
     seizure's start is smaller than postictal_time + sph + sop, this
-    seizure's preictal window can't be cleanly extracted - dropped
-    entirely (status=0), never trimmed.
+    seizure's preictal window is dropped, but kept as a real-width row
+    [i_end, j_start] so downstream interictal logic treats that gap as
+    occupied rather than free background.
     """
     logger.info("test_preictal_gate2_inter_seizure_gap_failure: start")
     df = pd.DataFrame({
@@ -120,13 +136,19 @@ def test_preictal_gate2_inter_seizure_gap_failure():
         "confidence": [1, 1],
         "status":     [-1, -1],
     })
-    # sph=10, sop=20, postictal_time=100 -> need gap >= 130; actual gap = 90 -> Gate 2 fails
+  
     result = add_preictal_tags(df, sph=10, sop=20, postictal_time=100)
-    second = result[(result["label"] == "pfnsz") & (result["start_time"] == 0.0) & (result["stop_time"] == 0.0)]
-    assert len(second) >= 1
-    assert (second["status"] == 0).all()
-    logger.info("test_preictal_gate2_inter_seizure_gap_failure: passed")
+    pfnsz = result[result["label"] == "pfnsz"].sort_values("start_time").reset_index(drop=True)
 
+    # seizure1 (i=0): no previous seizure, own start_time=100 clears Gate 1
+    # (sph+sop=30) -> viable, status=1
+    assert pfnsz.iloc[0]["status"] == 1
+
+    # seizure2 (i=1): fails Gate 2 -> dropped, real-width row [i_end=110, j_start=200]
+    assert pfnsz.iloc[1]["status"] == 0
+    assert pfnsz.iloc[1]["start_time"] == 110.0
+    assert pfnsz.iloc[1]["stop_time"] == 200.0
+    logger.info("test_preictal_gate2_inter_seizure_gap_failure: passed")
 
 def test_preictal_gate2_skipped_when_postictal_time_none():
     """
@@ -154,25 +176,24 @@ def test_preictal_gate2_skipped_when_postictal_time_none():
     assert pfnsz_rows.iloc[1]["stop_time"] == 180.0
     logger.info("test_preictal_gate2_skipped_when_postictal_time_none: passed")
 
-
 def test_preictal_no_partial_windows_ever(sample_master):
-    """
-    All-or-nothing: there is no status=1 row whose length differs from
-    exactly sph, and no status=0 row with nonzero times.
-    """
     logger.info("test_preictal_no_partial_windows_ever: start")
     result = add_preictal_tags(sample_master, sph=10, sop=50)
-    preictal_rows = result[result["label"].str.startswith("p")]
+    is_sopbuffer = result["label"].str.endswith("_sopbuffer")
+    preictal_rows = result[result["label"].str.startswith("p") & ~is_sopbuffer]
+    sopbuffer_rows = result[is_sopbuffer]
 
     valid = preictal_rows[preictal_rows["status"] == 1]
     lengths = (valid["stop_time"] - valid["start_time"]).round(6)
     assert (lengths == 10.0).all()  # sph (extracted window duration)
 
     dropped = preictal_rows[preictal_rows["status"] == 0]
-    assert (dropped["start_time"] == 0.0).all()
-    assert (dropped["stop_time"] == 0.0).all()
-    logger.info("test_preictal_no_partial_windows_ever: passed")
+    assert (dropped["stop_time"] >= dropped["start_time"]).all()  # real-width, gate1/gate2 dropped rows
 
+    sopbuffer_lengths = (sopbuffer_rows["stop_time"] - sopbuffer_rows["start_time"]).round(6)
+    assert (sopbuffer_lengths == 50.0).all()  # sop
+    assert (sopbuffer_rows["status"] == 1).all()
+    logger.info("test_preictal_no_partial_windows_ever: passed")
 
 def test_preictal_status_never_negative(sample_master):
     logger.info("test_preictal_status_never_negative: start")
