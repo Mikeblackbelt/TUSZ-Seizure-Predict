@@ -2,6 +2,9 @@ C:\Users\peppe\Tuh-Preprocess\data.csv
 dev
 TESTING_raweeg_output
 train
+train 
+raweeg_output
+bipolar_montages
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
