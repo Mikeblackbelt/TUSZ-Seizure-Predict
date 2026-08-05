@@ -86,22 +86,22 @@ def main():
 
     LOGGER.info(f"User selected tags: {selected_tags}")
 
-    # Timing parameters (SPH and SOP)
-    sph = float(
+    # Timing parameters (SOP and SPH)
+    sop = float(
         questionary.text(
-            "(SOP) Seizure Occurrence Period / Buffer (seconds):", 
+            "SOP - buffer/safety clearance before seizure onset (seconds):",
             default="120"
         ).ask()
     )
-    LOGGER.info(f"SOP buffer: {sph}s")
+    LOGGER.info(f"SOP buffer: {sop}s")
 
-    sop = float(
+    sph = float(
         questionary.text(
-            "(SOP + SPH) / Preictal duration (seconds):", 
+            "SPH - preictal window length to extract (seconds):",
             default="420"
         ).ask()
     )
-    LOGGER.info(f"SOP duration: {sop}s")
+    LOGGER.info(f"SPH preictal duration: {sph}s")
 
     # Optional Exclusion Intervals (Postictal)
     use_exclusions = questionary.confirm(
@@ -139,7 +139,7 @@ def main():
     # Add preictal tags
     LOGGER.info("Adding preictal tags...")
     master_df = preictal_segment.add_preictal_tags(
-        master_df, start_cutoff=sph, max_duration=sop
+        master_df, sph=sph, sop=sop, postictal_time=post_time
     )
 
     # Optional Exclusion Intervals
@@ -148,8 +148,6 @@ def main():
         master_df = preictal_segment.add_exclusion_intervals(
             master_df=master_df,
             postictal_time=post_time,
-            sph=sph,
-            sop=sop,
         )
 
     # Save result
