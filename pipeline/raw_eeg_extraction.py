@@ -25,7 +25,9 @@ def concatenate_session_eeg(
     """
     Reads a session's .edf files, filters + resamples each directly to
     TARGET_SFREQ (256 Hz), and concatenates them into a continuous
-    (N_TARGET_CHANNELS, total_resampled_samples) array.
+    (N_TARGET_CHANNELS, total_resampled_samples) array. 
+    
+    Calculates and saves file offsets for each recording.
 
     Filtering (adaptive notch, then Butterworth bandpass) happens per-file,
     at each file's native sample rate, before resampling - cutoffs are
@@ -45,6 +47,10 @@ def concatenate_session_eeg(
     Returns:
         np.ndarray of shape (N_TARGET_CHANNELS, total_resampled_samples), or None if
         the session has no .edf files.
+        `file_offsets` (list of dict): List of boundary offsets relative to the session where each dict contains:
+            - 'edf_path' (str): Path to the source .edf file.
+            - 'start_sample' (int): Inclusive start sample index in `combined`.
+            - 'end_sample' (int): Exclusive end sample index in `combined`.
     """
     edf_paths = session.get("edf_paths", [])
 

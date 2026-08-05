@@ -5,11 +5,10 @@ import sys
 import os
 import json
 from pathlib import Path
-
+from pipeline.recording_info import get_recording_info
 from pipeline import preictal_segment
 from util import handle_logs, verify_data
 from util.handle_logs import load_config, save_config
-from testing.testing_segmentation import test_preictal
 
 CONFIG_FILE = "app_path.json"
 
@@ -34,7 +33,7 @@ def main():
     parser.add_argument(
         "--save-config",
         action="store_true",
-        help="Save the provided arguments as defaults to app_path.json. This will also allow for all logs to be saved to the specified log file, rather than just the main logs."
+        help="Save the provided arguments as defaults to app_path.json."
     )
    
     args = parser.parse_args()
@@ -46,7 +45,7 @@ def main():
     if args.save_config:
         new_config = {
             "input_path": DATASET_PATH,
-            "applog": LOG_PATH,   # fixed key name
+            "applog": LOG_PATH,
         }
         save_config(new_config)
    
@@ -87,38 +86,39 @@ def main():
 
     LOGGER.info(f"User selected tags: {selected_tags}")
 
-    # Timing parameters with nice defaults
-    start_cutoff = float(
+    # Timing parameters (SOP and SPH)
+    sop = float(
         questionary.text(
-            "Preictal start cutoff (seconds):", 
-            default="300"
+            "SOP - buffer/safety clearance before seizure onset (seconds):",
+            default="120"
         ).ask()
     )
-    LOGGER.info(f"Start cutoff: {start_cutoff}s")
+    LOGGER.info(f"SOP buffer: {sop}s")
 
-    max_duration = float(
+    sph = float(
         questionary.text(
-            "Max preictal window duration (seconds):", 
-            default="600"
+            "SPH - preictal window length to extract (seconds):",
+            default="420"
         ).ask()
     )
-    LOGGER.info(f"Max duration: {max_duration}s")
+    LOGGER.info(f"SPH preictal duration: {sph}s")
 
-    # Optional postictal + consecutive
-    use_post_consec = questionary.confirm(
-        "Add postictal and consecutive tags?", 
+    # Optional Exclusion Intervals (Postictal)
+    use_exclusions = questionary.confirm(
+        "Add exclusion (postictal) intervals?", 
         default=True
     ).ask()
 
-    if use_post_consec:
-        post_length = float(
-            questionary.text("Postictal length (seconds):", default="300").ask()
+    if use_exclusions:
+        post_time = float(
+            questionary.text(
+                "Postictal exclusion time (seconds):", 
+                default="1800"
+            ).ask()
         )
-        consec_pre_length = float(
-            questionary.text("Preictal length for consecutive detection:", default="600").ask()
-        )
+        LOGGER.info(f"Postictal exclusion duration: {post_time}s")
     else:
-        post_length = consec_pre_length = None
+        post_time = None
 
     # Output path
     new_master_path = questionary.text(
@@ -139,21 +139,30 @@ def main():
     # Add preictal tags
     LOGGER.info("Adding preictal tags...")
     master_df = preictal_segment.add_preictal_tags(
-        master_df, start_cutoff, max_duration
+        master_df, sph=sph, sop=sop, postictal_time=post_time
     )
 
-    # Optional postictal + consecutive
-    if use_post_consec:
-        LOGGER.info("Adding postictal and consecutive tags...")
-        master_df = preictal_segment.add_postictal_and_consecutive(
-            master_df, 
-            postictal_length=post_length, 
-            preictal_length=consec_pre_length
+    # Optional Exclusion Intervals
+    if use_exclusions and post_time is not None:
+        LOGGER.info("Adding exclusion intervals...")
+        master_df = preictal_segment.add_exclusion_intervals(
+            master_df=master_df,
+            postictal_time=post_time,
         )
 
+    LOGGER.info("Computing recording durations...")
+    recording_durations = {}
+    for edf_path in master_df["edf_path"].unique():
+        info = get_recording_info(edf_path)
+        recording_durations[edf_path] = info["n_times"] / info["sfreq"]
+
+    LOGGER.info("Adding interictal tags...")
+    master_df = preictal_segment.add_interictal_tags(
+        master_df, recording_durations
+    )
     # Save result
     master_df.to_csv(new_master_path, index=False)
-   
+    
     LOGGER.info("-" * 60)
     LOGGER.info(f"Pipeline complete - output at {new_master_path}")
     LOGGER.info(f"Output saved to: {new_master_path} ({len(master_df)} rows)")
