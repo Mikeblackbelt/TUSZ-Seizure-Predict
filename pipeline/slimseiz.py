@@ -7,7 +7,8 @@ import os
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from pipeline.adaptive_windows import extract_windows
+from pipeline.slice_npy import extract_windows
+from pipeline.windows import segment_fixed, segment_adaptive
 
 logger = handle_logs.get_logger("slimseiz", "applog")
 
@@ -68,11 +69,16 @@ if __name__ == "__main__":
     Path("interictal").mkdir(exist_ok=True)
     for i, w in enumerate(interictal_windows):
         np.save(f"interictal/{w['label']}_{i}.npy", w["window"])
-       #associate the session metadata from the npy sessions with the channels/labels from the master csv to.... ignore? remove? 
-        #csv bi paths for both
-        #1 find the associated npy and csv
-        #2 slice npys
-    #drop non preictal
+
+
+    SEG_TIME = 4.0
+    SFREQ = 256
+
+    interictal_segments = segment_fixed(interictal_windows, SEG_TIME, SFREQ)
+
+    total_len_inter = sum(w["window"].shape[1] for w in interictal_windows)
+    preictal_segments = segment_adaptive(preictal_windows, SEG_TIME, SFREQ, total_len_inter=total_len_inter)
+
     
     #normalize
     #adaptive windows
