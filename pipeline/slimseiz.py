@@ -7,7 +7,7 @@ import os
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from pipeline.segment_npy import extract_windows
+from pipeline.segment_npy import extract_segments
 from pipeline.windows import segment_fixed, segment_adaptive
 
 logger = handle_logs.get_logger("slimseiz", "applog")
@@ -53,22 +53,22 @@ if __name__ == "__main__":
     # which mark the SOP safety gap, not extractable preictal signal.
     preictal_labels = [l for l in master_df["label"].unique()
                         if l.startswith("p") and not l.endswith("_sopbuffer")]
-    preictal_windows = extract_windows(
+    preictal_windows = extract_segments(
         master_df, indexed_sessions, output_dir="raweeg_output",
         label_filter=preictal_labels, status_filter=[1],
     )
 
-    interictal_windows = extract_windows(
+    interictal_windows = extract_segments(
         master_df, indexed_sessions, output_dir="raweeg_output",
         label_filter=["interictal"], status_filter=[2],
     )
     Path("preictal").mkdir(exist_ok=True)
     for i, w in enumerate(preictal_windows):
-        np.save(f"preictal/{w['label']}_{i}.npy", w["window"])
+        np.save(f"preictal/{w['label']}_{i}.npy", w["segment"])
 
     Path("interictal").mkdir(exist_ok=True)
     for i, w in enumerate(interictal_windows):
-        np.save(f"interictal/{w['label']}_{i}.npy", w["window"])
+        np.save(f"interictal/{w['label']}_{i}.npy", w["segment"])
 
 
     SEG_TIME = 4.0
@@ -76,7 +76,7 @@ if __name__ == "__main__":
 
     interictal_segments = segment_fixed(interictal_windows, SEG_TIME, SFREQ)
 
-    total_len_inter = sum(w["window"].shape[1] for w in interictal_windows)
+    total_len_inter = sum(w["segment"].shape[1] for w in interictal_windows)
     preictal_segments = segment_adaptive(preictal_windows, SEG_TIME, SFREQ, total_len_inter=total_len_inter)
 
     
