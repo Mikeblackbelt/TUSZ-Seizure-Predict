@@ -7,7 +7,7 @@ import os
 import pandas as pd
 import numpy as np
 from pathlib import Path
-from pipeline.slice_npy import extract_windows
+from pipeline.segment_npy import extract_windows
 from pipeline.windows import segment_fixed, segment_adaptive
 
 logger = handle_logs.get_logger("slimseiz", "applog")

@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 
 from pipeline.session_metadata import index_sessions
-from pipeline.slice_npy import extract_windows
+from pipeline.segment_npy import extract_windows
 
 available_keys = {p.stem.removesuffix("_raw") for p in Path("raweeg_output").glob("*_raw.npy")}
 print(f"{len(available_keys)} sessions available")

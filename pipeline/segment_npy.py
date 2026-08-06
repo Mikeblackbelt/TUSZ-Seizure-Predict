@@ -4,7 +4,7 @@ import pandas as pd
 from pathlib import Path
 from util import handle_logs
 
-logger = handle_logs.get_logger("window_extraction", "applog")
+logger = handle_logs.get_logger("segment_npy", "applog")
 
 TARGET_SFREQ = 256  # must match raw_eeg_extraction.TARGET_SFREQ
 
@@ -39,16 +39,16 @@ def time_to_sample(t, offset, target_sfreq=TARGET_SFREQ):
     same convention make_master_file()/add_preictal_tags() use) to a sample
     index in the session's concatenated array. Clipped to the file's own
     [start_sample, end_sample) span so per-file resample rounding can never
-    spill a window into the neighboring file's samples.
+    spill a segment into the neighboring file's samples.
     """
     sample = offset["start_sample"] + round(t * target_sfreq)
     return min(max(sample, offset["start_sample"]), offset["end_sample"])
 
 
-def extract_windows(master_df, sessions, output_dir, label_filter=None,
+def extract_segments(master_df, sessions, output_dir, label_filter=None,
                      status_filter=None, dedup_channels=True):
     """
-    Slice labeled windows out of per-session concatenated .npy arrays using
+    Slice labeled segments out of per-session concatenated .npy arrays using
     the time annotations in master_df (e.g. master_full.csv).
 
     Parameters:
@@ -56,20 +56,17 @@ def extract_windows(master_df, sessions, output_dir, label_filter=None,
         sessions: dict from index_sessions(), used to map edf_path -> session_key.
         output_dir: dir containing "{session_key}_raw.npy" + offsets.
         label_filter: optional iterable of exact label values to keep.
-        status_filter: optional iterable of status values to keep - e.g.
-            [2] for interictal, [1] for valid preictal/sopbuffer. Passing
-            status=0 rows here would slice real-width windows that were
-            explicitly dropped as non-viable - almost certainly not what
-            you want for training data.
+        status_filter: optional iterable of status values to keep - proper values are
+            [2] for valid interictal, [1] for valid preictal, [-1] for valid ictal
         dedup_channels: if True (default), collapse rows that share the
             same (edf_path, start_time, stop_time, label) - i.e. the same
-            window annotated once per channel - into a single full-channel
+            segment annotated once per channel - into a single full-channel
             extraction. If False, slice once per row (still full-channel;
             `channel` is carried through as metadata either way since the
             array itself is never split by channel here).
 
     Returns:
-        list of dicts: {"window": np.ndarray (N_TARGET_CHANNELS, n_samples),
+        list of dicts: {"segment": np.ndarray (N_TARGET_CHANNELS, n_samples),
                          "label": str, "status": int, "edf_path": str,
                          "start_time": float, "stop_time": float,
                          "channels": list[str]}
@@ -97,13 +94,13 @@ def extract_windows(master_df, sessions, output_dir, label_filter=None,
     for edf_path, group in grouped.groupby("edf_path"):
         session_key = edf_to_session.get(edf_path)
         if session_key is None:
-            logger.warning(f"No session found for {edf_path} - skipping {len(group)} windows")
+            logger.warning(f"No session found for {edf_path} - skipping {len(group)} segments")
             continue
 
         try:
             combined, offsets_by_edf = load_session_data(session_key, output_dir)
         except FileNotFoundError as e:
-            logger.warning(f"Missing session data for {session_key}: {e} - skipping {len(group)} windows")
+            logger.warning(f"Missing session data for {session_key}: {e} - skipping {len(group)} segments")
             continue
 
         offset = offsets_by_edf.get(edf_path)
@@ -115,11 +112,11 @@ def extract_windows(master_df, sessions, output_dir, label_filter=None,
             start_sample = time_to_sample(row["start_time"], offset)
             stop_sample = time_to_sample(row["stop_time"], offset)
             if stop_sample <= start_sample:
-                logger.warning(f"Degenerate window for {edf_path} {row['label']} - skipping")
+                logger.warning(f"Degenerate segments for {edf_path} {row['label']} - skipping")
                 continue
 
             results.append({
-                "window": combined[:, start_sample:stop_sample],
+                "segment": combined[:, start_sample:stop_sample],
                 "label": row["label"],
                 "status": row["status"],
                 "edf_path": edf_path,
@@ -128,5 +125,5 @@ def extract_windows(master_df, sessions, output_dir, label_filter=None,
                 "channels": row["channels"],
             })
 
-    logger.info(f"Extracted {len(results)} windows ({'deduped' if dedup_channels else 'per-row'})")
+    logger.info(f"Extracted {len(results)} segments ({'deduped' if dedup_channels else 'per-row'})")
     return results  
