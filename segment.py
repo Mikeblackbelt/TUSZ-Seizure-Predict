@@ -142,14 +142,13 @@ def main():
         master_df, start_cutoff=sph, max_duration=sop
     )
 
-    # Optional Exclusion Intervals
+    # Optional postictal/consecutive intervals
     if use_exclusions and post_time is not None:
-        LOGGER.info("Adding exclusion intervals...")
-        master_df = preictal_segment.add_exclusion_intervals(
+        LOGGER.info("Adding postictal and consecutive intervals...")
+        master_df = preictal_segment.add_postictal_and_consecutive(
             master_df=master_df,
             postictal_time=post_time,
-            sph=sph,
-            sop=sop,
+            preictal_duration=sop,
         )
 
     # Save result

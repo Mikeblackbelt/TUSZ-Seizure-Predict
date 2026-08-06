@@ -215,8 +215,8 @@ def add_exclusion_intervals(
     for idx, row in master_df.iterrows():
         rows.append(row.to_dict())
         
-        # Skip creating exclusion tags for already-tagged preictal/exclusion rows
-        if str(row["label"]).startswith("p") or str(row["label"]).startswith("x"):
+        # Skip creating exclusion tags for already-tagged generated rows
+        if str(row["label"]).startswith(("p", "q", "c", "x")):
             continue
             
         excl_row = row.copy().to_dict()
@@ -241,24 +241,102 @@ def add_exclusion_intervals(
         
     return result_df
 
+
+def add_postictal_and_consecutive(
+    master_df: pd.DataFrame,
+    postictal_time: float,
+    preictal_duration: float,
+) -> pd.DataFrame:
+    """
+    Adds q* postictal windows and c* consecutive windows for closely spaced seizures.
+    """
+    if master_df.empty:
+        return master_df.copy()
+
+    generated = []
+    original_rows = master_df[~master_df["label"].astype(str).str.startswith(("p", "q", "c", "x"))]
+
+    for (edf_path, channel), group in original_rows.groupby(["edf_path", "channel"], sort=False):
+        group = group.sort_values(by=["start_time"]).reset_index(drop=True)
+        idx = 0
+
+        while idx < len(group):
+            current = group.loc[idx].to_dict()
+            next_row = group.loc[idx + 1].to_dict() if idx + 1 < len(group) else None
+
+            if next_row is None:
+                q_row = current.copy()
+                q_row["label"] = f"q{current['label']}"
+                q_row["start_time"] = current["stop_time"]
+                q_row["stop_time"] = q_row["start_time"] + postictal_time
+                q_row["status"] = 1
+                generated.append(q_row)
+                idx += 1
+                continue
+
+            gap = next_row["start_time"] - current["stop_time"]
+            if gap < (postictal_time + preictal_duration):
+                if current["label"] == next_row["label"]:
+                    c_label = f"{current['label']}2"
+                else:
+                    c_label = f"{current['label']}{next_row['label']}"
+
+                c_row = current.copy()
+                c_row["label"] = f"c{c_label}"
+                c_row["start_time"] = current["stop_time"]
+                c_row["stop_time"] = next_row["start_time"] - preictal_duration
+
+                if c_row["stop_time"] <= c_row["start_time"]:
+                    c_row["stop_time"] = c_row["start_time"]
+                    c_row["status"] = 2
+                else:
+                    c_row["status"] = 1
+
+                generated.append(c_row)
+                idx += 1
+            else:
+                q_row = current.copy()
+                q_row["label"] = f"q{current['label']}"
+                q_row["start_time"] = current["stop_time"]
+                q_row["stop_time"] = q_row["start_time"] + postictal_time
+                q_row["status"] = 1
+                generated.append(q_row)
+                idx += 1
+
+    if not generated:
+        return master_df.copy()
+
+    result_df = pd.concat([master_df.copy(), pd.DataFrame(generated)], ignore_index=True)
+    if all(col in result_df.columns for col in ["split", "edf_path", "channel", "start_time"]):
+        result_df = result_df.sort_values(
+            by=["split", "edf_path", "channel", "start_time"],
+            ascending=[True, True, True, True],
+        ).reset_index(drop=True)
+
+    return result_df
+
 def resolve_overlaps(df: pd.DataFrame) -> pd.DataFrame:
     """
     Keep only the highest priority annotation when overlaps occur on the same (edf_path, channel).
-    Priority: exclusion (x*) > preictal (p*) > original ictal
+    Priority: exclusion (x*) > consecutive (c*) > preictal (p*) > original ictal > postictal (q*)
     """
     if df.empty:
         return df
 
-    def get_priority(label):
+    def _get_label_priority(label):
         lbl = str(label)
         if lbl.startswith('x'):
-            return 3
+            return 5
+        if lbl.startswith('c'):
+            return 4
         if lbl.startswith('p'):
-            return 2
-        return 1
+            return 3
+        if lbl.startswith('q'):
+            return 1
+        return 2
     
     df = df.copy()
-    df['priority'] = df['label'].apply(get_priority)
+    df['priority'] = df['label'].apply(_get_label_priority)
     
     df = df.sort_values(
         by=['edf_path', 'channel', 'start_time', 'priority'],

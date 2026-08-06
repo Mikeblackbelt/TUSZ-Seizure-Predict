@@ -4,6 +4,7 @@ from pipeline.preictal_segment import (
     make_master_file,
     add_preictal_tags,
     add_exclusion_intervals,
+    add_postictal_and_consecutive,
     get_split,
 )
 from util import handle_logs
@@ -163,3 +164,51 @@ def test_status_for_trimmed_windows(sample_ictal):
     exclusion_rows = result[result["label"].str.startswith("x")]
     assert not exclusion_rows.empty
     logger.info("test_status_for_trimmed_windows: passed")
+
+
+def test_adds_postictal_q_windows(sample_ictal):
+    """Postictal windows should be generated with q* labels."""
+    logger.info("test_adds_postictal_q_windows: start")
+
+    result = add_postictal_and_consecutive(
+        master_df=sample_ictal,
+        postictal_time=100,
+        preictal_duration=50,
+    )
+
+    assert len(result) > len(sample_ictal)
+    assert any(str(lbl).startswith("q") for lbl in result["label"].values)
+    logger.info("test_adds_postictal_q_windows: passed")
+
+
+def test_adds_consecutive_c_windows(sample_ictal):
+    """Closely spaced seizures should generate c* windows."""
+    logger.info("test_adds_consecutive_c_windows: start")
+
+    test_df = sample_ictal.copy()
+    test_df.loc[1, "start_time"] = 150.0
+    test_df.loc[1, "stop_time"] = 160.0
+    test_df.loc[1, "label"] = "gnsz"
+
+    result = add_postictal_and_consecutive(
+        master_df=test_df,
+        postictal_time=100,
+        preictal_duration=50,
+    )
+
+    assert any(str(lbl).startswith("c") for lbl in result["label"].values)
+    logger.info("test_adds_consecutive_c_windows: passed")
+
+
+def test_postictal_and_consecutive_preserve_original_rows(sample_ictal):
+    """Original ictal rows should remain intact after q/c generation."""
+    logger.info("test_postictal_and_consecutive_preserve_original_rows: start")
+
+    result = add_postictal_and_consecutive(
+        master_df=sample_ictal,
+        postictal_time=100,
+        preictal_duration=50,
+    )
+
+    assert len(result[result["label"].isin(sample_ictal["label"])]) == len(sample_ictal)
+    logger.info("test_postictal_and_consecutive_preserve_original_rows: passed")
