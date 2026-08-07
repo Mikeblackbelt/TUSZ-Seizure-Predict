@@ -415,7 +415,7 @@ def add_exclusion_intervals(master_df, postictal_time):
                 "label": f"x{row['label']}",
                 "start_time": i_end,
                 "stop_time": i_end + postictal_time,
-                "is_valid": 0,
+                "is_valid": False,
             })
 
     if new_rows:
