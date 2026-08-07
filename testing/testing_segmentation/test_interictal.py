@@ -18,9 +18,9 @@ def base_row():
     }
 
 
-def make_row(base_row, start, stop, label, status):
+def make_row(base_row, start, stop, label, is_valid):
     return {**base_row, "start_time": start, "stop_time": stop,
-            "label": label, "status": status}
+            "label": label, "is_valid": is_valid}
 
 
 def test_interictal_fills_single_middle_gap(base_row):
@@ -40,17 +40,17 @@ def test_interictal_fills_single_middle_gap(base_row):
     logger.info("test_interictal_fills_single_middle_gap: passed")
 
 
-def test_interictal_status_always_2(base_row):
-    logger.info("test_interictal_status_always_2: start")
-    master_df = pd.DataFrame([make_row(base_row, 0.0, 100.0, "gnsz", -1)])
+def test_interictal_is_valid_always_true(base_row):
+    logger.info("test_interictal_is_valid_always_true: start")
+    master_df = pd.DataFrame([make_row(base_row, 0.0, 100.0, "gnsz", True)])
     durations = {base_row["edf_path"]: 500.0}
-
+ 
     result = add_interictal_tags(master_df, durations)
     interictal = result[result["label"] == "interictal"]
-
+ 
     assert len(interictal) > 0
-    assert (interictal["status"] == 2).all()
-    logger.info("test_interictal_status_always_2: passed")
+    assert (interictal["is_valid"] == True).all()
+    logger.info("test_interictal_is_valid_always_true: passed")
 
 
 def test_interictal_leading_gap_from_zero(base_row):
@@ -127,7 +127,7 @@ def test_interictal_overlapping_rows_merged_before_gap_detection(base_row):
 
 def test_interictal_dropped_preictal_rows_dont_block_gap_filling(base_row):
     logger.info("test_interictal_dropped_preictal_rows_dont_block_gap_filling: start")
-    # pfnsz here is a Gate-1-failed row (status=0) - a rejected candidate
+    # pfnsz here is a Gate-1-failed row (is_valid=False) - a rejected candidate
     # window, not real labeled time. It must not count as "covered", or a
     # real stretch of background activity would be wrongly skipped.
     master_df = pd.DataFrame([
