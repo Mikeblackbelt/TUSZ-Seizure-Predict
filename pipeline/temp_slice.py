@@ -18,11 +18,11 @@ preictal_labels = [l for l in master_df["label"].unique()
                     if l.startswith("p") and not l.endswith("_sopbuffer")]
 preictal_windows = extract_segments(
     master_df, subset, output_dir="raweeg_output",
-    label_filter=preictal_labels, status_filter=[1],
+    label_filter=preictal_labels
 )
 interictal_windows = extract_segments(
     master_df, subset, output_dir="raweeg_output",
-    label_filter=["interictal"], status_filter=[2],
+    label_filter=["interictal"]
 )
 
 print(f"{len(preictal_windows)} preictal, {len(interictal_windows)} interictal")
