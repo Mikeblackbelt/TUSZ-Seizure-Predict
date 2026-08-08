@@ -55,12 +55,12 @@ if __name__ == "__main__":
                         if l.startswith("p") and not l.endswith("_sopbuffer")]
     preictal_windows = extract_segments(
         master_df, indexed_sessions, output_dir="raweeg_output",
-        label_filter=preictal_labels, status_filter=[1],
+        label_filter=preictal_labels
     )
 
     interictal_windows = extract_segments(
         master_df, indexed_sessions, output_dir="raweeg_output",
-        label_filter=["interictal"], status_filter=[2],
+        label_filter=["interictal"]
     )
     Path("preictal").mkdir(exist_ok=True)
     for i, w in enumerate(preictal_windows):

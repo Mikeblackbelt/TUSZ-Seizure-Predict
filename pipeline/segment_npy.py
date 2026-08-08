@@ -46,7 +46,7 @@ def time_to_sample(t, offset, target_sfreq=TARGET_SFREQ):
 
 
 def extract_segments(master_df, sessions, output_dir, label_filter=None,
-                     status_filter=None, dedup_channels=True):
+                     is_valid_filter=True, dedup_channels=True):
     """
     Slice labeled segments out of per-session concatenated .npy arrays using
     the time annotations in master_df (e.g. master_full.csv).
@@ -56,8 +56,8 @@ def extract_segments(master_df, sessions, output_dir, label_filter=None,
         sessions: dict from index_sessions(), used to map edf_path -> session_key.
         output_dir: dir containing "{session_key}_raw.npy" + offsets.
         label_filter: optional iterable of exact label values to keep.
-        status_filter: optional iterable of status values to keep - proper values are
-            [2] for valid interictal, [1] for valid preictal, [-1] for valid ictal
+        is_valid_filter: if True (default) only keep the valid segments 
+        in ictal (all since it's already from the csv files), preictal, interictal  
         dedup_channels: if True (default), collapse rows that share the
             same (edf_path, start_time, stop_time, label) - i.e. the same
             segment annotated once per channel - into a single full-channel
@@ -67,19 +67,19 @@ def extract_segments(master_df, sessions, output_dir, label_filter=None,
 
     Returns:
         list of dicts: {"segment": np.ndarray (N_TARGET_CHANNELS, n_samples),
-                         "label": str, "status": int, "edf_path": str,
+                         "label": str, "is_valid": bool, "edf_path": str,
                          "start_time": float, "stop_time": float,
                          "channels": list[str]}
     """
     df = master_df
     if label_filter is not None:
         df = df[df["label"].isin(label_filter)]
-    if status_filter is not None:
-        df = df[df["status"].isin(status_filter)]
+    if is_valid_filter is not None:
+        df = df[df["is_valid"] == is_valid_filter]
 
     if dedup_channels:
         grouped = (
-            df.groupby(["edf_path", "start_time", "stop_time", "label", "status"])["channel"]
+            df.groupby(["edf_path", "start_time", "stop_time", "label", "is_valid"])["channel"]
             .apply(list)
             .reset_index()
             .rename(columns={"channel": "channels"})
@@ -118,7 +118,7 @@ def extract_segments(master_df, sessions, output_dir, label_filter=None,
             results.append({
                 "segment": combined[:, start_sample:stop_sample],
                 "label": row["label"],
-                "status": row["status"],
+                "is_valid": row["is_valid"],
                 "edf_path": edf_path,
                 "start_time": row["start_time"],
                 "stop_time": row["stop_time"],

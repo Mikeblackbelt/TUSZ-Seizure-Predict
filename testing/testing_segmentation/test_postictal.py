@@ -1,10 +1,7 @@
 import pytest
 import pandas as pd
 from pipeline.preictal_segment import (
-    make_master_file,
-    add_preictal_tags,
     add_exclusion_intervals,
-    get_split,
 )
 from util import handle_logs
 from testing.helpers import *
@@ -21,7 +18,7 @@ def sample_ictal():
         "stop_time":  [110.0, 320.0, 820.0, 160.0],
         "label":      ["fnsz", "fnsz", "gnsz", "fnsz"],
         "confidence": [1, 1, 1, 1],
-        "status":     [-1, -1, -1, -1],
+        "is_valid":   [True, True, True, True],
     })
 
 
@@ -135,9 +132,11 @@ def test_postictal_consecutive_sorted(sample_ictal):
     logger.info("test_postictal_consecutive_sorted: passed")
 
 
-def test_status_for_exclusion_windows(sample_ictal):
-    """Basic check that status is handled on exclusion windows"""
-    logger.info("test_status_for_exclusion_windows: start")
+def test_is_not_valid_for_exclusion_windows(sample_ictal):
+    """Basic check that is_valid is handled on exclusion windows - exclusion
+    rows are always is_valid=Falaw (they're real, legitimate rows; is_valid
+    here means "extractable," not "safe to sample as background")."""
+    logger.info("test_is_not_valid_for_exclusion_windows: start")
     
     result = add_exclusion_intervals(
         master_df=sample_ictal,
@@ -146,4 +145,5 @@ def test_status_for_exclusion_windows(sample_ictal):
     
     exclusion_rows = result[result["label"].str.startswith("x")]
     assert not exclusion_rows.empty
-    logger.info("test_status_for_exclusion_windows: passed")
+    assert (exclusion_rows["is_valid"] == False).all()
+    logger.info("test_is_not_valid_for_exclusion_windows: passed")
