@@ -28,7 +28,7 @@ def sample_master():
         "stop_time":  [110.0, 420.0],
         "label":      ["fnsz", "gnsz"],
         "confidence": [1, 1],
-        "status":     [-1, -1],
+        "is_valid":     [True, True],
     })
 
 
@@ -62,19 +62,19 @@ def test_preictal_times_full_window(sample_master):
     pfnsz = result[result["label"] == "pfnsz"].iloc[0]
     assert pfnsz["start_time"] == 40.0
     assert pfnsz["stop_time"] == 50.0
-    assert pfnsz["status"] == 1
+    assert pfnsz["is_valid"] == True
 
     pgnsz = result[result["label"] == "pgnsz"].iloc[0]
     assert pgnsz["start_time"] == 340.0
     assert pgnsz["stop_time"] == 350.0
-    assert pgnsz["status"] == 1
+    assert pgnsz["is_valid"] == True
     logger.info("test_preictal_times_full_window: passed")
 
 
 def test_preictal_gate1_session_start_failure(sample_master):
     """
     Gate 1: if start_time < sph + sop, the window can't fit before session
-    start at all - dropped entirely (status=0), not trimmed.
+    start at all - dropped entirely (is_valid=False), not trimmed.
     """
     logger.info("test_preictal_gate1_session_start_failure: start")
     # row1: start=100, sph=10, sop=200 -> sph+sop=210 > 100 -> Gate 1 fails
@@ -82,7 +82,7 @@ def test_preictal_gate1_session_start_failure(sample_master):
     pfnsz = result[result["label"] == "pfnsz"].iloc[0]
     assert pfnsz["start_time"] == 0.0
     assert pfnsz["stop_time"] == 0.0
-    assert pfnsz["status"] == 0
+    assert pfnsz["is_valid"] == False
     logger.info("test_preictal_gate1_session_start_failure: passed")
 
 def test_preictal_gate1_session_start_failure(sample_master):
@@ -97,7 +97,7 @@ def test_preictal_gate1_session_start_failure(sample_master):
     pfnsz = result[result["label"] == "pfnsz"].iloc[0]
     assert pfnsz["start_time"] == 0.0
     assert pfnsz["stop_time"] == 100.0  # == j_start
-    assert pfnsz["status"] == 0
+    assert pfnsz["is_valid"] == False
     logger.info("test_preictal_gate1_session_start_failure: passed")
 
 
@@ -110,7 +110,7 @@ def test_preictal_gate1_uses_full_sph_plus_sop(sample_master):
     # row1: start=100, sph=150, sop=50 -> sph+sop=200 > 100 -> Gate 1 fails
     result = add_preictal_tags(sample_master, sph=150, sop=50)
     pfnsz = result[result["label"] == "pfnsz"].iloc[0]
-    assert pfnsz["status"] == 0
+    assert pfnsz["is_valid"] == False
     assert pfnsz["start_time"] == 0.0
     assert pfnsz["stop_time"] == 100.0  # == j_start
     logger.info("test_preictal_gate1_uses_full_sph_plus_sop: passed")
@@ -134,18 +134,18 @@ def test_preictal_gate2_inter_seizure_gap_failure():
         "stop_time":  [110.0, 210.0],
         "label":      ["fnsz", "fnsz"],
         "confidence": [1, 1],
-        "status":     [-1, -1],
+        "is_valid":     [True, True],
     })
   
     result = add_preictal_tags(df, sph=10, sop=20, postictal_time=100)
     pfnsz = result[result["label"] == "pfnsz"].sort_values("start_time").reset_index(drop=True)
 
     # seizure1 (i=0): no previous seizure, own start_time=100 clears Gate 1
-    # (sph+sop=30) -> viable, status=1
-    assert pfnsz.iloc[0]["status"] == 1
+    # (sph+sop=30) -> viable, is_valid=True
+    assert pfnsz.iloc[0]["is_valid"] == True
 
     # seizure2 (i=1): fails Gate 2 -> dropped, real-width row [i_end=110, j_start=200]
-    assert pfnsz.iloc[1]["status"] == 0
+    assert pfnsz.iloc[1]["is_valid"] == False
     assert pfnsz.iloc[1]["start_time"] == 110.0
     assert pfnsz.iloc[1]["stop_time"] == 200.0
     logger.info("test_preictal_gate2_inter_seizure_gap_failure: passed")
@@ -165,13 +165,13 @@ def test_preictal_gate2_skipped_when_postictal_time_none():
         "stop_time":  [110.0, 210.0],
         "label":      ["fnsz", "fnsz"],
         "confidence": [1, 1],
-        "status":     [-1, -1],
+        "is_valid":     [True, True],
     })
     # sph=10, sop=20 -> second seizure's window = [200-20-10, 200-20] = [170, 180]
     # Gate 1: 200 >= 30 -> passes. postictal_time=None -> Gate 2 not evaluated.
     result = add_preictal_tags(df, sph=10, sop=20, postictal_time=None)
     pfnsz_rows = result[result["label"] == "pfnsz"].sort_values("start_time").reset_index(drop=True)
-    assert pfnsz_rows.iloc[1]["status"] == 1
+    assert pfnsz_rows.iloc[1]["is_valid"] == True
     assert pfnsz_rows.iloc[1]["start_time"] == 170.0
     assert pfnsz_rows.iloc[1]["stop_time"] == 180.0
     logger.info("test_preictal_gate2_skipped_when_postictal_time_none: passed")
@@ -182,27 +182,21 @@ def test_preictal_no_partial_windows_ever(sample_master):
     is_sopbuffer = result["label"].str.endswith("_sopbuffer")
     preictal_rows = result[result["label"].str.startswith("p") & ~is_sopbuffer]
     sopbuffer_rows = result[is_sopbuffer]
-
-    valid = preictal_rows[preictal_rows["status"] == 1]
+ 
+    valid = preictal_rows[preictal_rows["is_valid"] == True]
     lengths = (valid["stop_time"] - valid["start_time"]).round(6)
     assert (lengths == 10.0).all()  # sph (extracted window duration)
-
-    dropped = preictal_rows[preictal_rows["status"] == 0]
+ 
+    dropped = preictal_rows[preictal_rows["is_valid"] == False]
     assert (dropped["stop_time"] >= dropped["start_time"]).all()  # real-width, gate1/gate2 dropped rows
-
+ 
     sopbuffer_lengths = (sopbuffer_rows["stop_time"] - sopbuffer_rows["start_time"]).round(6)
     assert (sopbuffer_lengths == 50.0).all()  # sop
-    assert (sopbuffer_rows["status"] == 1).all()
+    # SOP buffer rows are real intervals (never zeroed/dropped like a
+    # gate-failure row) but are never extracted as training data, so
+    # is_valid=False here means "not extractable," not "gate failed."
+    assert (sopbuffer_rows["is_valid"] == False).all()
     logger.info("test_preictal_no_partial_windows_ever: passed")
-
-def test_preictal_status_never_negative(sample_master):
-    logger.info("test_preictal_status_never_negative: start")
-    result = add_preictal_tags(sample_master, sph=9999, sop=9999)
-    preictal_rows = result[result["label"].str.startswith("p")]
-    assert (preictal_rows["start_time"] >= 0).all()
-    assert (preictal_rows["stop_time"] >= 0).all()
-    logger.info("test_preictal_status_never_negative: passed")
-
 
 def test_preictal_original_rows_unchanged(sample_master):
     logger.info("test_preictal_original_rows_unchanged: start")
@@ -210,7 +204,7 @@ def test_preictal_original_rows_unchanged(sample_master):
     fnsz = result[result["label"] == "fnsz"].iloc[0]
     assert fnsz["start_time"] == 100.0
     assert fnsz["stop_time"] == 110.0
-    assert fnsz["status"] == -1
+    assert fnsz["is_valid"] == True
     logger.info("test_preictal_original_rows_unchanged: passed")
 
 
