@@ -1,4 +1,5 @@
 ﻿import argparse
+import os
 import subprocess
 import sys
 
@@ -10,6 +11,10 @@ from pipeline.raw_eeg_extraction import concatenate_session_eeg
 from pipeline.session_index import index_sessions
 from util import handle_logs, verify_data
 from util.handle_logs import load_config, save_config
+
+
+def _checkpoint_exists(checkpoint_dir, session_key, stage):
+    return os.path.exists(os.path.join(checkpoint_dir, f"{session_key}_{stage}.npy"))
 
 
 def build_arg_parser(config):
@@ -141,6 +146,20 @@ def run_unit_tests(logger):
     logger.info("Unit tests passed")
 
 
+def resolve_output_path(output_path, default_filename="master_full.csv"):
+    if not output_path:
+        return default_filename
+
+    expanded_path = os.path.expanduser(output_path)
+    if os.path.isdir(expanded_path):
+        return os.path.join(expanded_path, default_filename)
+
+    if expanded_path.endswith((os.sep, "/", "\\")):
+        return os.path.join(expanded_path, default_filename)
+
+    return expanded_path
+
+
 def build_master_file(
     input_path,
     output_path,
@@ -174,6 +193,10 @@ def build_master_file(
     logger.info("Resolving label overlaps...")
     master_df = preictal_segment.resolve_overlaps(master_df)
 
+    parent_dir = os.path.dirname(output_path)
+    if parent_dir and not os.path.exists(parent_dir):
+        os.makedirs(parent_dir, exist_ok=True)
+
     master_df.to_csv(output_path, index=False)
     logger.info(f"Master file saved to {output_path} ({len(master_df)} rows)")
     return master_df
@@ -199,6 +222,14 @@ def process_sessions(
 
     for session_key, session in sessions.items():
         logger.info(f"Processing session: {session_key}")
+
+        raw_checkpoint_exists = _checkpoint_exists(checkpoint_dir, session_key, "raw")
+        proc_checkpoint_exists = _checkpoint_exists(checkpoint_dir, session_key, "proc")
+
+        if raw_checkpoint_exists and (not create_montage_flag or proc_checkpoint_exists):
+            logger.info(f"Skipping {session_key}: existing checkpoints already present")
+            continue
+
         result = concatenate_session_eeg(
             session,
             session_key=session_key,
@@ -238,11 +269,13 @@ def main():
             "notch_power_percentile": args.notch_power_percentile,
         })
 
+    resolved_master_output = resolve_output_path(args.master_output)
+
     logger = handle_logs.get_logger("pipeline_gpt2class", args.log_path)
     logger.info("-" * 60)
     logger.info("Starting pipeline_gpt2class")
     logger.info(f"Dataset path: {args.input_path}")
-    logger.info(f"Master output: {args.master_output}")
+    logger.info(f"Master output: {resolved_master_output}")
     logger.info(f"Checkpoint dir: {args.checkpoint_dir}")
     logger.info("-" * 60)
 
@@ -273,7 +306,7 @@ def main():
     try:
         build_master_file(
             input_path=args.input_path,
-            output_path=args.master_output,
+            output_path=resolved_master_output,
             allow_tag=allow_tag,
             sph=args.sph,
             sop=args.sop,
