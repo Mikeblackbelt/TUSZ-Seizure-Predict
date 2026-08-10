@@ -9,13 +9,13 @@ import numpy as np
 from pathlib import Path
 from pipeline.segment_npy import extract_segments
 from pipeline.windows import segment_fixed, segment_adaptive
+from pipeline.slimseiz_model import OneDCNN
 import torch
-import torch.nn as nn
+from torch.utils.data import DataLoader, Dataset
+from torch import nn, optim
 
-logger = handle_logs.get_logger("slimseiz", "applog")
-
-if __name__ == "__main__":
-    #PREPROCESSING PIPELINE
+logger = handle_logs.get_logger("slimseiz_pipeline", "applog")
+def runSlimSeizPreprocessing():
     #index sessions
     indexed_sessions = index_sessions("train")
     MAX_SESSIONS = 50
@@ -112,5 +112,65 @@ if __name__ == "__main__":
     for i, s in enumerate(interictal_segments):
         np.save(f"interictal/{s['label']}_{i}.npy", s["segment"])
     #normalize
-  
+
+class EEGSegmentDataset(Dataset):
+    def __init__(self, preictal_dir="preictal", interictal_dir="interictal", normalize=True):
+        self.files = []
+        self.labels = []
+
+        for f in os.listdir(preictal_dir):
+            self.files.append(os.path.join(preictal_dir, f))
+            self.labels.append(1)  # preictal = 1
+
+        for f in os.listdir(interictal_dir):
+            self.files.append(os.path.join(interictal_dir, f))
+            self.labels.append(0)  # interictal = 0
+
+        self.normalize = normalize
+
+    def __len__(self):
+        return len(self.files)
+
+    def __getitem__(self, idx):
+        arr = np.load(self.files[idx])  # shape (20, 1024)
+
+        if self.normalize:
+            arr = (arr - arr.mean(axis=1, keepdims=True)) / (arr.std(axis=1, keepdims=True) + 1e-8)
+
+        x = torch.tensor(arr, dtype=torch.float32)
+        y = torch.tensor(self.labels[idx], dtype=torch.long)
+        return x, y
+if __name__ == "__main__":
     
+    # runSlimSeizPreprocessing()
+    model = OneDCNN(input_channels=20) #bipolar montages gives 20
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+
+    dataset = EEGSegmentDataset("preictal", "interictal")
+    loader = DataLoader(dataset, batch_size=16, shuffle=True)
+
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=1e-3)
+
+    model.train()
+    for epoch in range(5):
+        total_loss = 0
+        correct = 0
+        total = 0
+
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+
+            optimizer.zero_grad()
+            logits, _ = model(x)
+            loss = criterion(logits, y)
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item() * x.size(0)
+            correct += (logits.argmax(dim=1) == y).sum().item()
+            total += x.size(0)
+
+        print(f"Epoch {epoch+1}: loss={total_loss/total:.4f}, acc={correct/total:.4f}")
