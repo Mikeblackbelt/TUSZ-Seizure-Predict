@@ -2,6 +2,7 @@ import json
 import numpy as np
 import pandas as pd
 from pathlib import Path
+from pipeline.checkpoint_io import load_checkpoint
 from util import handle_logs
 
 logger = handle_logs.get_logger("segment_npy", "applog")
@@ -20,29 +21,49 @@ def build_edf_to_session_map(sessions):
 
 def load_session_data(session_key, output_dir):
     """
-    Load the concatenated raw array and its per-file offsets for a session.
+    Load the bipolar-converted ('proc') checkpoint and its per-file offsets
+    for a session.
 
-    ASSUMPTION: save_checkpoint() writes "{session_key}_raw.npy" and
-    save_offsets() writes "{session_key}_offsets.json" containing the
-    file_offsets list as-is. Adjust the two paths below if your actual
-    util.handle_logs implementations name/serialize things differently.
+    NOTE: this now reads the *proc* checkpoint (post bipolar_montages.py),
+    not raw. Segmentation/windowing must happen on the bipolar-converted
+    signal per the pipeline order (filter -> resample/concat -> bipolar ->
+    exclusion -> window), so slicing from the 17-channel referential raw
+    array here was a bug - bipolar_montages.py's output was never being
+    consumed downstream.
     """
-    combined = np.load(Path(output_dir) / f"{session_key}_raw.npy")
+    combined = load_checkpoint(session_key, output_dir, stage="proc")
     with open(Path(output_dir) / f"{session_key}_offsets.json") as f:
         offsets = json.load(f)
     return combined, {o["edf_path"]: o for o in offsets}
 
 
-def time_to_sample(t, offset, target_sfreq=TARGET_SFREQ):
+def time_to_sample(t, edf_path, offsets_by_edf, target_sfreq=TARGET_SFREQ):
     """
     Map a within-file time (seconds, relative to that edf's own start - the
-    same convention make_master_file()/add_preictal_tags() use) to a sample
-    index in the session's concatenated array. Clipped to the file's own
-    [start_sample, end_sample) span so per-file resample rounding can never
-    spill a segment into the neighboring file's samples.
+    same convention make_master_file()/add_preictal_tags() use) to a
+    session-global sample index in the session's concatenated array.
+
+    Unlike the original version, this is clipped to the *whole session's*
+    [0, total_samples) span, not the single file's own [start_sample,
+    end_sample) span. That's what allows preictal windows anchored near a
+    file boundary to pull samples from the adjacent file: since the
+    combined array is just files concatenated back-to-back, a negative t
+    (before this file's start) or t beyond this file's own duration lands
+    on real adjacent-file samples rather than getting clamped away.
+
+    CAVEAT: this assumes recordings within a session are wall-clock
+    contiguous (no real time gap between files, e.g. electrode
+    reapplication, break in recording). The array is sample-contiguous by
+    construction regardless, but if there IS a real gap, a cross-file
+    preictal window will silently pull samples from the wrong wall-clock
+    time. Worth checking recording start timestamps (if available in
+    session_metadata / recording_info) before trusting cross-file
+    preictal segments in training.
     """
+    offset = offsets_by_edf[edf_path]
     sample = offset["start_sample"] + round(t * target_sfreq)
-    return min(max(sample, offset["start_sample"]), offset["end_sample"])
+    total_samples = max(o["end_sample"] for o in offsets_by_edf.values())
+    return min(max(sample, 0), total_samples)
 
 
 def extract_segments(master_df, sessions, output_dir, label_filter=None,
@@ -54,19 +75,22 @@ def extract_segments(master_df, sessions, output_dir, label_filter=None,
     Parameters:
         master_df: rows already filtered/loaded from master_full.csv.
         sessions: dict from index_sessions(), used to map edf_path -> session_key.
-        output_dir: dir containing "{session_key}_raw.npy" + offsets.
+        output_dir: dir containing "{session_key}_proc.npy" + offsets.
         label_filter: optional iterable of exact label values to keep.
-        is_valid_filter: if True (default) only keep the valid segments 
-        in ictal (all since it's already from the csv files), preictal, interictal  
+            IMPORTANT: is_valid_filter alone does NOT exclude raw ictal
+            rows - they're legitimately is_valid=True (see
+            preictal_segment.resolve_overlaps()'s priority scheme; ictal
+            outranks preictal/interictal and is only carved when
+            overlapped, not dropped wholesale). To build a
+            preictal/interictal-only training set, call this with
+            label_filter=preictal_segment.get_trainable_labels(master_df).
+        is_valid_filter: if True (default) only keep the valid segments.
         dedup_channels: if True (default), collapse rows that share the
-            same (edf_path, start_time, stop_time, label) - i.e. the same
-            segment annotated once per channel - into a single full-channel
-            extraction. If False, slice once per row (still full-channel;
-            `channel` is carried through as metadata either way since the
-            array itself is never split by channel here).
+            same (edf_path, start_time, stop_time, label) into a single
+            full-channel extraction.
 
     Returns:
-        list of dicts: {"segment": np.ndarray (N_TARGET_CHANNELS, n_samples),
+        list of dicts: {"segment": np.ndarray (N_BIPOLAR_CHANNELS, n_samples),
                          "label": str, "is_valid": bool, "edf_path": str,
                          "start_time": float, "stop_time": float,
                          "channels": list[str]}
@@ -103,14 +127,13 @@ def extract_segments(master_df, sessions, output_dir, label_filter=None,
             logger.warning(f"Missing session data for {session_key}: {e} - skipping {len(group)} segments")
             continue
 
-        offset = offsets_by_edf.get(edf_path)
-        if offset is None:
+        if edf_path not in offsets_by_edf:
             logger.warning(f"No file offset recorded for {edf_path} in session {session_key} - skipping")
             continue
 
         for _, row in group.iterrows():
-            start_sample = time_to_sample(row["start_time"], offset)
-            stop_sample = time_to_sample(row["stop_time"], offset)
+            start_sample = time_to_sample(row["start_time"], edf_path, offsets_by_edf)
+            stop_sample = time_to_sample(row["stop_time"], edf_path, offsets_by_edf)
             if stop_sample <= start_sample:
                 logger.warning(f"Degenerate segments for {edf_path} {row['label']} - skipping")
                 continue
@@ -126,4 +149,4 @@ def extract_segments(master_df, sessions, output_dir, label_filter=None,
             })
 
     logger.info(f"Extracted {len(results)} segments ({'deduped' if dedup_channels else 'per-row'})")
-    return results  
+    return results
