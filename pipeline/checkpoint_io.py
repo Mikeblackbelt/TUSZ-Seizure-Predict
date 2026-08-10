@@ -13,6 +13,13 @@ def _checkpoint_path(output_dir: str, session_key: str, stage: str) -> str:
     return os.path.join(output_dir, f"{session_key}_{stage}.npz")
 
 
+def _prepare_array_for_storage(array: np.ndarray) -> np.ndarray:
+    array = np.asarray(array)
+    if array.dtype.kind == "f":
+        return array.astype(np.float32, copy=False)
+    return array
+
+
 def save_checkpoint(array: np.ndarray, session_key: str, output_dir: str, stage: str) -> str:
     """
     Save a session's EEG data array to a compressed .npz file for later retrieval.
@@ -24,8 +31,12 @@ def save_checkpoint(array: np.ndarray, session_key: str, output_dir: str, stage:
 
     os.makedirs(output_dir, exist_ok=True)
     out_path = _checkpoint_path(output_dir, session_key, stage)
-    np.savez_compressed(out_path, data=array)
-    logger.info(f"Saved {stage} checkpoint for {session_key} to {out_path} (shape={array.shape})")
+    compact_array = _prepare_array_for_storage(array)
+    np.savez_compressed(out_path, data=compact_array)
+    logger.info(
+        f"Saved {stage} checkpoint for {session_key} to {out_path} "
+        f"(shape={compact_array.shape}, dtype={compact_array.dtype})"
+    )
     return out_path
 
 

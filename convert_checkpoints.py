@@ -1,5 +1,7 @@
 import argparse
 import io
+import os
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -25,6 +27,8 @@ def convert_checkpoint_file(input_path: str, output_path: str | None = None) -> 
         return None
 
     try:
+        if array.dtype.kind == 'f':
+            array = array.astype(np.float32, copy=False)
         archive_bytes = io.BytesIO()
         np.savez_compressed(archive_bytes, data=array)
         target_path.write_bytes(archive_bytes.getvalue())
@@ -51,6 +55,15 @@ def convert_directory(checkpoint_dir: str, output_dir: str | None = None) -> lis
             result = convert_checkpoint_file(str(path), str(out_path))
             if result is not None:
                 converted.append(result)
+                if str(output_dir).lower() == 'none':
+                    continue
+                if target_dir != source_dir and out_path.exists():
+                    try:
+                        source_path = source_dir / path.name
+                        if source_path.exists():
+                            source_path.unlink()
+                    except OSError:
+                        pass
     return converted
 
 

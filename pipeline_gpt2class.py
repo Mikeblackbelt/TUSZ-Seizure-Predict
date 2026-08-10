@@ -14,7 +14,10 @@ from util.handle_logs import load_config, save_config
 
 
 def _checkpoint_exists(checkpoint_dir, session_key, stage):
-    return os.path.exists(os.path.join(checkpoint_dir, f"{session_key}_{stage}.npy"))
+    for suffix in (".npz", ".npy"):
+        if os.path.exists(os.path.join(checkpoint_dir, f"{session_key}_{stage}{suffix}")):
+            return True
+    return False
 
 
 def build_arg_parser(config):
