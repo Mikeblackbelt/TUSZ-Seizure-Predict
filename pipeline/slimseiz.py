@@ -9,12 +9,18 @@ import numpy as np
 from pathlib import Path
 from pipeline.segment_npy import extract_segments
 from pipeline.windows import segment_fixed, segment_adaptive
+import torch
+import torch.nn as nn
 
 logger = handle_logs.get_logger("slimseiz", "applog")
 
 if __name__ == "__main__":
+    #PREPROCESSING PIPELINE
     #index sessions
     indexed_sessions = index_sessions("train")
+    MAX_SESSIONS = 50
+    session_keys = list(indexed_sessions.keys())[:MAX_SESSIONS]
+    indexed_sessions = {k: indexed_sessions[k] for k in session_keys}
 
     #concatenate sessions (drops channels, resamples, and saves to .npy)
     
@@ -62,24 +68,49 @@ if __name__ == "__main__":
         master_df, indexed_sessions, output_dir="raweeg_output",
         label_filter=["interictal"]
     )
-    Path("preictal").mkdir(exist_ok=True)
-    for i, w in enumerate(preictal_windows):
-        np.save(f"preictal/{w['label']}_{i}.npy", w["segment"])
+    from pipeline.bipolar_montages import BIPOLAR_PAIRS, channel_index_dict
+    from pipeline.eeg_channels import N_TARGET_CHANNELS
 
-    Path("interictal").mkdir(exist_ok=True)
-    for i, w in enumerate(interictal_windows):
-        np.save(f"interictal/{w['label']}_{i}.npy", w["segment"])
+    def montage_windows(windows):
+        # note: this is basically doing what create_bipolar_montages is, but that function makes us load and save
+        # the files from disk. i would change the function but the others are using it, so i might break their code if i change it
+        montaged = []
+        for w in windows:
+            arr = w["segment"]
+            if not (arr.shape[0] == N_TARGET_CHANNELS and arr.shape[1] > 0):
+                logger.warning(f"Skipping window {w.get('label')} — bad segment shape {arr.shape}")
+                continue
+            proc = np.zeros((len(BIPOLAR_PAIRS), arr.shape[1]))
+            for i, (ch1, ch2) in enumerate(BIPOLAR_PAIRS):
+                proc[i, :] = arr[channel_index_dict[ch1], :] - arr[channel_index_dict[ch2], :]
+            d = {k: v for k, v in w.items() if k != "segment"}
+            d["window"] = proc
+            montaged.append(d)
+        return montaged
 
+    preictal_windows = montage_windows(preictal_windows)
+    interictal_windows = montage_windows(interictal_windows)
 
     SEG_TIME = 4.0
     SFREQ = 256
 
+    # Fixed (non-overlapping) segmentation for the majority class
     interictal_segments = segment_fixed(interictal_windows, SEG_TIME, SFREQ)
 
-    total_len_inter = sum(w["segment"].shape[1] for w in interictal_windows)
-    preictal_segments = segment_adaptive(preictal_windows, SEG_TIME, SFREQ, total_len_inter=total_len_inter)
+    # Adaptive (overlapping) segmentation for the minority class,
+    # balanced against interictal's total sample count
+    total_len_inter = sum(w["window"].shape[1] for w in interictal_windows)
+    preictal_segments = segment_adaptive(
+        preictal_windows, SEG_TIME, SFREQ, total_len_inter=total_len_inter
+    )
 
-    
+    Path("preictal").mkdir(exist_ok=True)
+    for i, s in enumerate(preictal_segments):
+        np.save(f"preictal/{s['label']}_{i}.npy", s["segment"])  
+
+    Path("interictal").mkdir(exist_ok=True)
+    for i, s in enumerate(interictal_segments):
+        np.save(f"interictal/{s['label']}_{i}.npy", s["segment"])
     #normalize
-    #adaptive windows
+  
     
