@@ -94,7 +94,7 @@ def concatenate_session_eeg(
         if raw.info["sfreq"] != TARGET_SFREQ:
             raw.resample(TARGET_SFREQ, npad="auto", verbose="Error")
 
-        data = raw.get_data()
+        data = raw.get_data().astype(np.float32)
         resampled_chunks.append(data)
         n_samples = data.shape[1]
         file_offsets.append({
