@@ -6,112 +6,111 @@ import time
 import os
 import pandas as pd
 import numpy as np
+import shutil
 from pathlib import Path
 from pipeline.segment_npy import extract_segments
 from pipeline.windows import segment_fixed, segment_adaptive
 from pipeline.slimseiz_model import OneDCNN
+from pipeline.bipolar_montages import BIPOLAR_PAIRS, channel_index_dict
+from pipeline.eeg_channels import N_TARGET_CHANNELS
 import torch
 from torch.utils.data import DataLoader, Dataset
 from torch import nn, optim
 
 logger = handle_logs.get_logger("slimseiz_pipeline", "applog")
-def runSlimSeizPreprocessing():
-    #index sessions
-    indexed_sessions = index_sessions("train")
-    MAX_SESSIONS = 50
-    session_keys = list(indexed_sessions.keys())[:MAX_SESSIONS]
-    indexed_sessions = {k: indexed_sessions[k] for k in session_keys}
+SEG_TIME = 4.0
+SFREQ = 256
 
-    #concatenate sessions (drops channels, resamples, and saves to .npy)
-    
+def montage_windows(windows):
+    montaged = []
+    for w in windows:
+        arr = w["segment"]  
+        if not (arr.shape[0] == N_TARGET_CHANNELS and arr.shape[1] > 0):
+            logger.warning(f"Skipping window {w.get('label')} — bad segment shape {arr.shape}")
+            continue
+        proc = np.zeros((len(BIPOLAR_PAIRS), arr.shape[1]))
+        for i, (ch1, ch2) in enumerate(BIPOLAR_PAIRS):
+            proc[i, :] = arr[channel_index_dict[ch1], :] - arr[channel_index_dict[ch2], :]
+        d = {k: v for k, v in w.items() if k != "segment"}
+        d["window"] = proc
+        montaged.append(d)
+    return montaged
+
+
+def run_pipeline_for_split(split_name, master_csv, raw_output_dir):
+    logger.info(f"=== Running pipeline for split: {split_name} ===")
+
+    indexed_sessions = index_sessions(split_name)
     for key, session in indexed_sessions.items():
-        session = indexed_sessions[key]
+        raw_path = Path(raw_output_dir) / f"{key}_raw.npy"
 
-        logger.info(f"\n at key {key}")
-        logger.info(f"  {len(session['edf_paths'])} .edf files")
-
-        start_time = time.time()
-
-        result, file_offsets = concatenate_session_eeg(
-            session,
-            session_key=key,
-            output_dir="raweeg_output"
-        )
-
-        elapsed = time.time() - start_time
-
-        if result is not None:
-            logger.info(f"\nShape: {result.shape}")
-            logger.info(f"Saved to: raweeg_output/{key}_raw.npy")
-            logger.info(f"Time consumed: {elapsed:.2f} seconds")
+        #checks if the concatenation already happened to enable faster reruns of the pipeline without redoing
+        #the most time consuming step
+        if raw_path.exists():
+            logger.info(f"[{split_name}] {key} already extracted, skipping concatenation")
         else:
-            logger.warning("No .edf files in this session")
+            logger.info(f"[{split_name}] at key {key}: {len(session['edf_paths'])} .edf files")
+            start_time = time.time()
+            result, _ = concatenate_session_eeg(
+                session, session_key=key, output_dir=raw_output_dir
+            )
+            elapsed = time.time() - start_time
 
-        #session metadata 
+            if result is not None:
+                logger.info(f"[{split_name}] Shape: {result.shape}, saved, {elapsed:.2f}s")
+            else:
+                logger.warning(f"[{split_name}] No .edf files for {key}")
         metadata = extract_session_metadata(session)
-        logger.info(f"Metadata for {key}: {metadata}")
+        logger.info(f"[{split_name}] Metadata for {key}: {metadata}")
 
-        extract_session_metadata(session)
+    master_df = pd.read_csv(master_csv)
 
-    master_df = pd.read_csv("master_full.csv")
-
-    # Valid preictal windows only - status=1, exclude the sopbuffer rows,
-    # which mark the SOP safety gap, not extractable preictal signal.
     preictal_labels = [l for l in master_df["label"].unique()
                         if l.startswith("p") and not l.endswith("_sopbuffer")]
     preictal_windows = extract_segments(
-        master_df, indexed_sessions, output_dir="raweeg_output",
+        master_df, indexed_sessions, output_dir=raw_output_dir,
         label_filter=preictal_labels
     )
-
+    if len(preictal_windows) == 0:
+        logger.error(f"[{split_name}] No preictal windows extracted — skipping segmentation for this split")
+        return
     interictal_windows = extract_segments(
-        master_df, indexed_sessions, output_dir="raweeg_output",
+        master_df, indexed_sessions, output_dir=raw_output_dir,
         label_filter=["interictal"]
     )
-    from pipeline.bipolar_montages import BIPOLAR_PAIRS, channel_index_dict
-    from pipeline.eeg_channels import N_TARGET_CHANNELS
-
-    def montage_windows(windows):
-        # note: this is basically doing what create_bipolar_montages is, but that function makes us load and save
-        # the files from disk. i would change the function but the others are using it, so i might break their code if i change it
-        montaged = []
-        for w in windows:
-            arr = w["segment"]
-            if not (arr.shape[0] == N_TARGET_CHANNELS and arr.shape[1] > 0):
-                logger.warning(f"Skipping window {w.get('label')} — bad segment shape {arr.shape}")
-                continue
-            proc = np.zeros((len(BIPOLAR_PAIRS), arr.shape[1]))
-            for i, (ch1, ch2) in enumerate(BIPOLAR_PAIRS):
-                proc[i, :] = arr[channel_index_dict[ch1], :] - arr[channel_index_dict[ch2], :]
-            d = {k: v for k, v in w.items() if k != "segment"}
-            d["window"] = proc
-            montaged.append(d)
-        return montaged
+    if len(preictal_windows) == 0:
+        logger.error(f"[{split_name}] No interictal windows extracted — skipping segmentation for this split")
+        return
 
     preictal_windows = montage_windows(preictal_windows)
     interictal_windows = montage_windows(interictal_windows)
 
-    SEG_TIME = 4.0
-    SFREQ = 256
-
-    # Fixed (non-overlapping) segmentation for the majority class
     interictal_segments = segment_fixed(interictal_windows, SEG_TIME, SFREQ)
 
-    # Adaptive (overlapping) segmentation for the minority class,
-    # balanced against interictal's total sample count
     total_len_inter = sum(w["window"].shape[1] for w in interictal_windows)
     preictal_segments = segment_adaptive(
         preictal_windows, SEG_TIME, SFREQ, total_len_inter=total_len_inter
     )
 
-    Path("preictal").mkdir(exist_ok=True)
-    for i, s in enumerate(preictal_segments):
-        np.save(f"preictal/{s['label']}_{i}.npy", s["segment"])  
+    preictal_dir = Path(f"preictal_{split_name}")
+    interictal_dir = Path(f"interictal_{split_name}")
 
-    Path("interictal").mkdir(exist_ok=True)
+    #deletes the existing directories if they exist so old and new segments
+    #dont get mixed up if running pipeline multiple times on the same split
+    if preictal_dir.exists():
+        shutil.rmtree(preictal_dir)
+    if interictal_dir.exists():
+        shutil.rmtree(interictal_dir)
+    preictal_dir.mkdir(exist_ok=True)
+    interictal_dir.mkdir(exist_ok=True)
+
+    for i, s in enumerate(preictal_segments):
+        np.save(preictal_dir / f"{s['label']}_{i}.npy", s["segment"])
     for i, s in enumerate(interictal_segments):
-        np.save(f"interictal/{s['label']}_{i}.npy", s["segment"])
-    #normalize
+        np.save(interictal_dir / f"{s['label']}_{i}.npy", s["segment"])
+
+    logger.info(f"[{split_name}] Saved {len(preictal_segments)} preictal, "
+                f"{len(interictal_segments)} interictal segments")
 
 class EEGSegmentDataset(Dataset):
     def __init__(self, preictal_dir="preictal", interictal_dir="interictal", normalize=True):
@@ -140,37 +139,74 @@ class EEGSegmentDataset(Dataset):
         x = torch.tensor(arr, dtype=torch.float32)
         y = torch.tensor(self.labels[idx], dtype=torch.long)
         return x, y
-if __name__ == "__main__":
-    
-    # runSlimSeizPreprocessing()
-    model = OneDCNN(input_channels=20) #bipolar montages gives 20
-    
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
+def evaluate(model, loader, device, criterion):
+    model.eval()
+    correct, total, total_loss = 0, 0, 0
+    tp, tn, fp, fn = 0, 0, 0, 0
 
-    dataset = EEGSegmentDataset("preictal", "interictal")
-    loader = DataLoader(dataset, batch_size=16, shuffle=True)
+    with torch.no_grad():
+        for x, y in loader:
+            x, y = x.to(device), y.to(device)
+            logits, _ = model(x)
+            loss = criterion(logits, y)
+            total_loss += loss.item() * x.size(0)
+
+            preds = logits.argmax(dim=1)
+            correct += (preds == y).sum().item()
+            total += x.size(0)
+
+            # label convention: 1 = preictal (positive), 0 = interictal (negative)
+            tp += ((preds == 1) & (y == 1)).sum().item()
+            tn += ((preds == 0) & (y == 0)).sum().item()
+            fp += ((preds == 1) & (y == 0)).sum().item()
+            fn += ((preds == 0) & (y == 1)).sum().item()
+
+    avg_loss = total_loss / total
+    acc = correct / total
+    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else 0.0  # recall on preictal
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else 0.0  # recall on interictal
+
+    return avg_loss, acc, sensitivity, specificity
+
+if __name__ == "__main__":
+    run_pipeline_for_split("train", master_csv="master_full.csv", raw_output_dir="raweeg_output_train")
+    run_pipeline_for_split("dev", master_csv="master_dev.csv", raw_output_dir="raweeg_output_dev")
+    
+    train_dataset = EEGSegmentDataset("preictal_train", "interictal_train")
+    dev_dataset = EEGSegmentDataset("preictal_dev", "interictal_dev")
+
+    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
+    dev_loader = DataLoader(dev_dataset, batch_size=16, shuffle=False)
+
+    logger.info(f"Train segments: {len(train_dataset)}, Dev segments: {len(dev_dataset)}")
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = OneDCNN(input_channels=20).to(device)
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=1e-3)
 
-    model.train()
-    for epoch in range(5):
-        total_loss = 0
-        correct = 0
-        total = 0
-
-        for x, y in loader:
+    best_dev_acc = 0
+    for epoch in range(30):
+        model.train()
+        train_loss, train_correct, train_total = 0, 0, 0
+        for x, y in train_loader:
             x, y = x.to(device), y.to(device)
-
             optimizer.zero_grad()
             logits, _ = model(x)
             loss = criterion(logits, y)
             loss.backward()
             optimizer.step()
+            train_loss += loss.item() * x.size(0)
+            train_correct += (logits.argmax(dim=1) == y).sum().item()
+            train_total += x.size(0)
 
-            total_loss += loss.item() * x.size(0)
-            correct += (logits.argmax(dim=1) == y).sum().item()
-            total += x.size(0)
+        dev_loss, dev_acc, dev_sens, dev_spec = evaluate(model, dev_loader, device, criterion)
+        logger.info(f"Epoch {epoch+1}: train_loss={train_loss/train_total:.4f} train_acc={train_correct/train_total:.4f} "
+    f"| dev_loss={dev_loss:.4f} dev_acc={dev_acc:.4f} dev_sens={dev_sens:.4f} dev_spec={dev_spec:.4f}")
 
-        print(f"Epoch {epoch+1}: loss={total_loss/total:.4f}, acc={correct/total:.4f}")
+        if dev_acc > best_dev_acc:
+            best_dev_acc = dev_acc
+            torch.save(model.state_dict(), "best_model.pt")
+
+    logger.info(f"Best dev accuracy: {best_dev_acc:.4f}")

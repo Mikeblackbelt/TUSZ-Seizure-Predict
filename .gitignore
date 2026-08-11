@@ -9,8 +9,16 @@ raweeg_output
 test
 preictal
 interictal
+dev
+eval
 bipolar_montages
 master_full.csv
+raweeg_output_train
+raweeg_output_dev
+interictal_train
+interictal_dev
+preictal_train
+preictal_dev
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
