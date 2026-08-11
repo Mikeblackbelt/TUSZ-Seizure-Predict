@@ -8,24 +8,24 @@ logger = handle_logs.get_logger("test_bipolar_montages", "logs/test.log")
 
 
 @pytest.fixture
-def dataset_dir(tmp_path):
+def checkpoint_dir(tmp_path):
     return tmp_path
 
 
-def write_fake_raw_npy(path, n_samples=100, seed=0):
+def write_fake_raw_checkpoint(checkpoint_dir, session_key, n_samples=100, seed=0):
     rng = np.random.default_rng(seed)
     array = rng.random((N_TARGET_CHANNELS, n_samples))
-    np.save(path, array)
+    np.save(checkpoint_dir / f"{session_key}_raw.npy", array)
     return array
 
 
-def test_create_bipolar_montages_all_pairs_correct(dataset_dir):
+def test_create_bipolar_montages_all_pairs_correct(checkpoint_dir):
     logger.info("test_create_bipolar_montages_all_pairs_correct: start")
 
-    npy_path = dataset_dir / "session.npy"
-    original = write_fake_raw_npy(npy_path)
+    session_key = "session"
+    original = write_fake_raw_checkpoint(checkpoint_dir, session_key)
 
-    result = create_bipolar_montages(str(npy_path))
+    result = create_bipolar_montages(session_key, str(checkpoint_dir))
 
     for i, (ch1, ch2) in enumerate(BIPOLAR_PAIRS):
         idx1 = channel_index_dict[ch1]
@@ -36,28 +36,30 @@ def test_create_bipolar_montages_all_pairs_correct(dataset_dir):
     logger.info("test_create_bipolar_montages_all_pairs_correct: passed")
 
 
-def test_create_bipolar_montages_returns_none_on_missing_file(dataset_dir):
+def test_create_bipolar_montages_returns_none_on_missing_file(checkpoint_dir):
     logger.info("test_create_bipolar_montages_returns_none_on_missing_file: start")
-    result = create_bipolar_montages(str(dataset_dir / "does_not_exist.npy"))
+    result = create_bipolar_montages("does_not_exist", str(checkpoint_dir))
     assert result is None
     logger.info("test_create_bipolar_montages_returns_none_on_missing_file: passed")
 
 
-def test_create_bipolar_montages_returns_none_on_wrong_channel_count(dataset_dir):
+def test_create_bipolar_montages_returns_none_on_wrong_channel_count(checkpoint_dir):
     logger.info("test_create_bipolar_montages_returns_none_on_wrong_channel_count: start")
-    npy_path = dataset_dir / "bad_session.npy"
-    np.save(npy_path, np.random.rand(N_TARGET_CHANNELS - 1, 100))
-    result = create_bipolar_montages(str(npy_path))
+    session_key = "bad_session"
+    np.save(checkpoint_dir / f"{session_key}_raw.npy", np.random.rand(N_TARGET_CHANNELS - 1, 100))
+    result = create_bipolar_montages(session_key, str(checkpoint_dir))
     assert result is None
     logger.info("test_create_bipolar_montages_returns_none_on_wrong_channel_count: passed")
 
 
-def test_create_bipolar_montages_saves_to_output_path(dataset_dir):
-    logger.info("test_create_bipolar_montages_saves_to_output_path: start")
-    npy_path = dataset_dir / "session.npy"
-    write_fake_raw_npy(npy_path)
-    output_path = dataset_dir / "nested" / "montage_output.npy"
-    result = create_bipolar_montages(str(npy_path), output_path=str(output_path))
-    assert output_path.exists()
-    assert np.allclose(np.load(output_path), result)
-    logger.info("test_create_bipolar_montages_saves_to_output_path: passed")
+def test_create_bipolar_montages_saves_proc_checkpoint(checkpoint_dir):
+    logger.info("test_create_bipolar_montages_saves_proc_checkpoint: start")
+    session_key = "session"
+    write_fake_raw_checkpoint(checkpoint_dir, session_key)
+
+    result = create_bipolar_montages(session_key, str(checkpoint_dir))
+
+    proc_path = checkpoint_dir / f"{session_key}_proc.npy"
+    assert proc_path.exists()
+    assert np.allclose(np.load(proc_path), result)
+    logger.info("test_create_bipolar_montages_saves_proc_checkpoint: passed")
