@@ -1,8 +1,7 @@
 import mne
 import numpy as np
 
-from pipeline.checkpoint_io import save_checkpoint, save_offsets
-from pipeline.eeg_channels import CHANNELS_TO_INCLUDE, N_TARGET_CHANNELS
+from pipeline.eeg_channels import CHANNELS_TO_INCLUDE, N_TARGET_CHANNELS, reorder_to_canonical
 from filters.adaptive_filters import detect_noise_frequencies, apply_notch_filter
 from filters.simple_filters import bandpass_filter_raw
 from util import handle_logs
@@ -14,8 +13,6 @@ TARGET_SFREQ = 256  # Define target sampling rate centrally
 
 def concatenate_session_eeg(
     session,
-    session_key=None,
-    output_dir=None,
     apply_filtering=True,
     notch_variance_threshold=0.20,
     notch_power_percentile=80,
@@ -25,9 +22,14 @@ def concatenate_session_eeg(
     """
     Reads a session's .edf files, filters + resamples each directly to
     TARGET_SFREQ (256 Hz), and concatenates them into a continuous
-    (N_TARGET_CHANNELS, total_resampled_samples) array. 
-    
-    Calculates and saves file offsets for each recording.
+    (N_TARGET_CHANNELS, total_resampled_samples) array.
+
+    Calculates the file offsets for each recording.
+
+    NOTE: this no longer writes a "raw" checkpoint to disk. The returned
+    array and offsets are meant to be kept in memory and passed straight
+    into downstream processing (e.g. segment_npy.extract_segments) so the
+    final product .npy files are the only thing that ever hits disk.
 
     Filtering (adaptive notch, then Butterworth bandpass) happens per-file,
     at each file's native sample rate, before resampling - cutoffs are
@@ -38,7 +40,7 @@ def concatenate_session_eeg(
         apply_filtering (bool): If True (default), run notch + bandpass
             filtering on each file before resampling. Set False to skip
             filtering entirely (e.g. for comparing filtered vs unfiltered
-            checkpoints).
+            in-memory arrays).
         notch_variance_threshold, notch_power_percentile: passed through to
             adaptive_filters.detect_noise_frequencies().
         bandpass_low, bandpass_high: passed through to
@@ -56,7 +58,7 @@ def concatenate_session_eeg(
 
     if not edf_paths:
         logger.warning("Session has no .edf files - nothing to concatenate")
-        return None
+        return None, []
 
     logger.info(
         f"Processing {len(edf_paths)} .edf recordings "
@@ -95,6 +97,14 @@ def concatenate_session_eeg(
             raw.resample(TARGET_SFREQ, npad="auto", verbose="Error")
 
         data = raw.get_data().astype(np.float32)
+
+        # `include=CHANNELS_TO_INCLUDE` selects channels but does NOT
+        # guarantee row order - MNE preserves each .edf's own header
+        # order, which varies between AR/LE recordings. Enforce a fixed,
+        # known row order here so downstream code (bipolar_montages.py)
+        # can safely index rows by channel name.
+        data = reorder_to_canonical(data, raw.ch_names)
+
         resampled_chunks.append(data)
         n_samples = data.shape[1]
         file_offsets.append({
@@ -111,15 +121,6 @@ def concatenate_session_eeg(
         f"Successfully concatenated {len(edf_paths)} recordings into "
         f"resampled {combined.shape} array"
     )
-
-    if output_dir is not None:
-        if not session_key:
-            raise ValueError(
-                "output_dir was given but session_key was not - "
-                "cannot determine output filename"
-            )
-        save_offsets(file_offsets, session_key, output_dir)
-        save_checkpoint(combined, session_key, output_dir, stage="raw")
 
     return combined, file_offsets
 
@@ -140,17 +141,12 @@ if __name__ == "__main__":
 
         start_time = time.time()
 
-        result, file_offsets = concatenate_session_eeg(
-            session,
-            session_key=key,
-            output_dir="raweeg_output"
-        )
+        result, file_offsets = concatenate_session_eeg(session)
 
         elapsed = time.time() - start_time
 
         if result is not None:
             print(f"\nShape: {result.shape}")
-            print(f"Saved to: raweeg_output/{key}_raw.npy")
             print(f"Time consumed: {elapsed:.2f} seconds")
         else:
             print("No .edf files in this session")

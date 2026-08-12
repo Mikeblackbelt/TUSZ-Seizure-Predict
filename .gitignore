@@ -1,6 +1,10 @@
 C:\Users\peppe\Tuh-Preprocess\data.csv
 dev
 train
+master_dev.csv
+master_eval.csv
+master_train.csv
+eval
 raweeg_output
 TESTING_raweeg_output
 train

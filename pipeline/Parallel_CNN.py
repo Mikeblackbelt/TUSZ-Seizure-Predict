@@ -137,24 +137,23 @@ if __name__ == "__main__":
     session_keys = list(indexed_sessions.keys())[:MAX_SESSIONS]
     indexed_sessions = {k: indexed_sessions[k] for k in session_keys}
 
-    # concatenate sessions (drops channels, resamples, saves to .npy)
+    # concatenate sessions (drops channels, resamples) and keep the raw
+    # arrays + offsets in memory - nothing is written to disk here anymore.
+    # session_data feeds straight into extract_segments() below.
+    session_data = {}
     for key, session in indexed_sessions.items():
         logger.info(f"\n at key {key}")
         logger.info(f"  {len(session['edf_paths'])} .edf files")
 
         start_time = time.time()
 
-        result, file_offsets = concatenate_session_eeg(
-            session,
-            session_key=key,
-            output_dir="raweeg_output"
-        )
+        result, file_offsets = concatenate_session_eeg(session)
 
         elapsed = time.time() - start_time
 
         if result is not None:
+            session_data[key] = (result, file_offsets)
             logger.info(f"\nShape: {result.shape}")
-            logger.info(f"Saved to: raweeg_output/{key}_raw.npy")
             logger.info(f"Time consumed: {elapsed:.2f} seconds")
         else:
             logger.warning("No .edf files in this session")
@@ -171,12 +170,12 @@ if __name__ == "__main__":
     ]
 
     preictal_windows = extract_segments(
-        master_df, indexed_sessions, output_dir="raweeg_output",
+        master_df, indexed_sessions, session_data,
         label_filter=preictal_labels
     )
 
     interictal_windows = extract_segments(
-        master_df, indexed_sessions, output_dir="raweeg_output",
+        master_df, indexed_sessions, session_data,
         label_filter=["interictal"]
     )
 
@@ -196,7 +195,7 @@ if __name__ == "__main__":
             for i, (ch1, ch2) in enumerate(BIPOLAR_PAIRS):
                 proc[i, :] = arr[channel_index_dict[ch1], :] - arr[channel_index_dict[ch2], :]
             d = {k: v for k, v in w.items() if k != "segment"}
-            d["segment"] = proc
+            d["window"] = proc
             montaged.append(d)
         return montaged
 
