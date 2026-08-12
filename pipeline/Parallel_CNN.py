@@ -27,7 +27,7 @@ logger = handle_logs.get_logger("slimseiz", "applog")
 # dev). If you only have a single combined master_full.csv, point both
 # splits at it via MASTER_FILE_OVERRIDE.
 SPLITS = ["train", "dev"]
-MASTER_FILE_TEMPLATE = "master_full_{split}.csv"
+MASTER_FILE_TEMPLATE = "master_{split}.csv"
 MASTER_FILE_OVERRIDE = None  # e.g. "master_full.csv" to force one file for all splits
 
 MAX_SESSIONS = {"train": 50, "dev": 50}  # None to disable the cap for a split
