@@ -13,6 +13,7 @@ import pandas as pd
 import numpy as np
 from scipy.stats import kurtosis, skew
 from sklearn.decomposition import PCA
+import sys
 from scipy.io import savemat
 
 logger = handle_logs.get_logger("slimseiz", "applog")
@@ -54,34 +55,46 @@ def gen_time_domain_features(data):
 
     return np.array(features)  # shape (176,)
 
-def save_features(features, file, label_prefix):
-    Path(feature_output_dir).mkdir(parents=True, exist_ok=True)
-    base = os.path.basename(file)
-    out_name = f"{label_prefix}_{base}"
-    out_path = os.path.join(feature_output_dir, out_name)
-    np.save(out_path, features)
-
 def run_feature_extraction():
-    # preictal
+    # Make sure the output directory exists first
+    Path(feature_output_dir).mkdir(parents=True, exist_ok=True)
+
+    # ---------------- PREICTAL ----------------
     pre_files = glob.glob(os.path.join(processed_data_dir_pre, "*.npy"))
     for file in pre_files:
+        base = os.path.basename(file)
+        out_path = os.path.join(feature_output_dir, f"preictal_{base}")
+
+        # The short-circuit check for individual files
+        if os.path.exists(out_path):
+            print(f"Skipping preictal: {base} (Features already exist)")
+            continue
+
         print("Processing preictal:", file)
         try:
             data = np.load(file)  # shape (channels, samples)
             features = gen_time_domain_features(data)
-            save_features(features, file, "preictal")
+            np.save(out_path, features)
         except Exception as e:
             print("Failed (preictal):", file)
             print(e)
 
-    # interictal
+    # ---------------- INTERICTAL ----------------
     inter_files = glob.glob(os.path.join(processed_data_dir_inter, "*.npy"))
     for file in inter_files:
+        base = os.path.basename(file)
+        out_path = os.path.join(feature_output_dir, f"interictal_{base}")
+
+        # The short-circuit check for individual files
+        if os.path.exists(out_path):
+            print(f"Skipping interictal: {base} (Features already exist)")
+            continue
+
         print("Processing interictal:", file)
         try:
             data = np.load(file)  # shape (channels, samples)
             features = gen_time_domain_features(data)
-            save_features(features, file, "interictal")
+            np.save(out_path, features)
         except Exception as e:
             print("Failed (interictal):", file)
             print(e)
@@ -131,15 +144,21 @@ def run_pca_and_export_mat():
 # ------------------ MAIN PIPELINE ------------------
 
 if __name__ == "__main__":
-    # index sessions
+    final_output_file = "test_inputs.mat"
+
+    # Top-level short-circuit: Skips the whole pipeline if the final file is done
+    if os.path.exists(final_output_file):
+        logger.info(f"Final output '{final_output_file}' already exists. Skipping pipeline.")
+        print(f"✅ '{final_output_file}' found! Skipping data extraction and processing.")
+        sys.exit(0) 
+
+    print(f"'{final_output_file}' not found. Starting the pipeline...")
+    
     indexed_sessions = index_sessions("train")
     MAX_SESSIONS = 50
     session_keys = list(indexed_sessions.keys())[:MAX_SESSIONS]
     indexed_sessions = {k: indexed_sessions[k] for k in session_keys}
 
-    # concatenate sessions (drops channels, resamples) and keep the raw
-    # arrays + offsets in memory - nothing is written to disk here anymore.
-    # session_data feeds straight into extract_segments() below.
     session_data = {}
     for key, session in indexed_sessions.items():
         logger.info(f"\n at key {key}")
@@ -163,7 +182,6 @@ if __name__ == "__main__":
 
     master_df = pd.read_csv("master_full.csv")
 
-    # preictal labels (exclude sopbuffer)
     preictal_labels = [
         l for l in master_df["label"].unique()
         if l.startswith("p") and not l.endswith("_sopbuffer")
@@ -218,8 +236,6 @@ if __name__ == "__main__":
     for i, s in enumerate(interictal_segments):
         np.save(f"interictal/{s['label']}_{i}.npy", s["segment"])
 
-    # run feature extraction on saved windows
     run_feature_extraction()
 
-    # PCA + export to MATLAB .mat
     run_pca_and_export_mat()
