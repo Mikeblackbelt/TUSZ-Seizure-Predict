@@ -1,7 +1,7 @@
 import os
 import numpy as np
 from pipeline.checkpoint_io import load_checkpoint, save_checkpoint
-from pipeline.eeg_channels import N_TARGET_CHANNELS
+from pipeline.eeg_channels import N_TARGET_CHANNELS, CANONICAL_CHANNELS
 from util import handle_logs
 
 logger = handle_logs.get_logger("bipolar_montages", "applog")
@@ -15,11 +15,9 @@ BIPOLAR_PAIRS = [
     ('T3', 'C3'), ('C3', 'CZ'), ('CZ', 'C4'), ('C4', 'T4'),
 ]
 
-# Strict mapping to the CANONICAL_CHANNELS enforced in raw_eeg_extraction.py
-CANONICAL_CHANNELS = [
-    'FP1', 'F7', 'T3', 'T5', 'O1', 'FP2', 'F8', 'T4', 'T6', 'O2', 
-    'F3', 'C3', 'P3', 'F4', 'C4', 'P4', 'CZ'
-]
+# Row order is enforced upstream in raw_eeg_extraction.py via
+# reorder_to_canonical() before a raw checkpoint is ever saved, so it's
+# safe to index rows positionally by CANONICAL_CHANNELS here.
 channel_index_dict = {ch: i for i, ch in enumerate(CANONICAL_CHANNELS)}
 
 def create_bipolar_montages(session_key, checkpoint_dir, bipolar_pairs=BIPOLAR_PAIRS):

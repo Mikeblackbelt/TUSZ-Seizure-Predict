@@ -1,7 +1,5 @@
-import json
 import numpy as np
 import pandas as pd
-from pathlib import Path
 from util import handle_logs
 
 logger = handle_logs.get_logger("segment_npy", "applog")
@@ -18,21 +16,6 @@ def build_edf_to_session_map(sessions):
     return mapping
 
 
-def load_session_data(session_key, output_dir):
-    """
-    Load the concatenated raw array and its per-file offsets for a session.
-
-    ASSUMPTION: save_checkpoint() writes "{session_key}_raw.npy" and
-    save_offsets() writes "{session_key}_offsets.json" containing the
-    file_offsets list as-is. Adjust the two paths below if your actual
-    util.handle_logs implementations name/serialize things differently.
-    """
-    combined = np.load(Path(output_dir) / f"{session_key}_raw.npy")
-    with open(Path(output_dir) / f"{session_key}_offsets.json") as f:
-        offsets = json.load(f)
-    return combined, {o["edf_path"]: o for o in offsets}
-
-
 def time_to_sample(t, offset, target_sfreq=TARGET_SFREQ):
     """
     Map a within-file time (seconds, relative to that edf's own start - the
@@ -45,16 +28,20 @@ def time_to_sample(t, offset, target_sfreq=TARGET_SFREQ):
     return min(max(sample, offset["start_sample"]), offset["end_sample"])
 
 
-def extract_segments(master_df, sessions, output_dir, label_filter=None,
+def extract_segments(master_df, sessions, session_data, label_filter=None,
                      is_valid_filter=True, dedup_channels=True):
     """
-    Slice labeled segments out of per-session concatenated .npy arrays using
-    the time annotations in master_df (e.g. master_full.csv).
+    Slice labeled segments out of per-session concatenated in-memory arrays
+    using the time annotations in master_df (e.g. master_full.csv).
 
     Parameters:
         master_df: rows already filtered/loaded from master_full.csv.
         sessions: dict from index_sessions(), used to map edf_path -> session_key.
-        output_dir: dir containing "{session_key}_raw.npy" + offsets.
+        session_data: dict[session_key] -> (combined, file_offsets), i.e. the
+            exact (np.ndarray, list[dict]) tuple returned by
+            raw_eeg_extraction.concatenate_session_eeg() for that session.
+            Nothing is read from disk here - the raw arrays are expected to
+            still be held in memory from the extraction step.
         label_filter: optional iterable of exact label values to keep.
         is_valid_filter: if True (default) only keep the valid segments 
         in ictal (all since it's already from the csv files), preictal, interictal  
@@ -97,11 +84,13 @@ def extract_segments(master_df, sessions, output_dir, label_filter=None,
             logger.warning(f"No session found for {edf_path} - skipping {len(group)} segments")
             continue
 
-        try:
-            combined, offsets_by_edf = load_session_data(session_key, output_dir)
-        except FileNotFoundError as e:
-            logger.warning(f"Missing session data for {session_key}: {e} - skipping {len(group)} segments")
+        session_entry = session_data.get(session_key)
+        if session_entry is None:
+            logger.warning(f"No in-memory data for session {session_key} - skipping {len(group)} segments")
             continue
+
+        combined, file_offsets = session_entry
+        offsets_by_edf = {o["edf_path"]: o for o in file_offsets}
 
         offset = offsets_by_edf.get(edf_path)
         if offset is None:
@@ -126,4 +115,4 @@ def extract_segments(master_df, sessions, output_dir, label_filter=None,
             })
 
     logger.info(f"Extracted {len(results)} segments ({'deduped' if dedup_channels else 'per-row'})")
-    return results  
+    return results
