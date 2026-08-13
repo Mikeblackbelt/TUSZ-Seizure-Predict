@@ -8,7 +8,7 @@ import pandas as pd
 import numpy as np
 import shutil
 from pathlib import Path
-from pipeline.segment_npy import extract_segments
+from pipeline.segment_npy import extract_segments, build_edf_to_session_map
 from pipeline.windows import segment_fixed, segment_adaptive
 from pipeline.slimseiz_model import OneDCNN
 from pipeline.bipolar_montages import BIPOLAR_PAIRS, channel_index_dict
@@ -37,54 +37,52 @@ def montage_windows(windows):
     return montaged
 
 
-def run_pipeline_for_split(split_name, master_csv, raw_output_dir):
+def run_pipeline_for_split(split_name, master_csv, raw_output_dir=None):
     logger.info(f"=== Running pipeline for split: {split_name} ===")
+    start_time = time.time()
+    indexed_sessions = dict(list(index_sessions(split_name).items())[:5])
+    master_df = pd.read_csv(master_csv)
 
-    indexed_sessions = index_sessions(split_name)
+    normalized_sessions = {}  # key -> (z-scored combined array, file_offsets)
+
     for key, session in indexed_sessions.items():
-        raw_path = Path(raw_output_dir) / f"{key}_raw.npy"
-
-        #checks if the concatenation already happened to enable faster reruns of the pipeline without redoing
-        #the most time consuming step
-        if raw_path.exists():
-            logger.info(f"[{split_name}] {key} already extracted, skipping concatenation")
+        logger.info(f"[{split_name}] at key {key}: {len(session['edf_paths'])} .edf files")
+        result, file_offsets = concatenate_session_eeg(session)
+        if result is None:
+            logger.warning(f"[{split_name}] No .edf files for {key}")
         else:
-            logger.info(f"[{split_name}] at key {key}: {len(session['edf_paths'])} .edf files")
-            start_time = time.time()
-            result, _ = concatenate_session_eeg(
-                session, session_key=key, output_dir=raw_output_dir
-            )
-            elapsed = time.time() - start_time
+            logger.info(f"[{split_name}] Shape: {result.shape}")
+            mean = result.mean(axis=1, keepdims=True)
+            std = result.std(axis=1, keepdims=True)
+            std[std == 0] = 1.0  # guard against flat/dead channels
+            normalized = (result - mean) / std
+            normalized_sessions[key] = (normalized, file_offsets)
+            logger.info(f"[{split_name}] {key} z-score normalized (per channel)")
 
-            if result is not None:
-                logger.info(f"[{split_name}] Shape: {result.shape}, saved, {elapsed:.2f}s")
-            else:
-                logger.warning(f"[{split_name}] No .edf files for {key}")
         metadata = extract_session_metadata(session)
         logger.info(f"[{split_name}] Metadata for {key}: {metadata}")
-
-    master_df = pd.read_csv(master_csv)
 
     preictal_labels = [l for l in master_df["label"].unique()
                         if l.startswith("p") and not l.endswith("_sopbuffer")]
     preictal_windows = extract_segments(
-        master_df, indexed_sessions, output_dir=raw_output_dir,
+        master_df, indexed_sessions, normalized_sessions,
         label_filter=preictal_labels
     )
     if len(preictal_windows) == 0:
         logger.error(f"[{split_name}] No preictal windows extracted — skipping segmentation for this split")
         return
     interictal_windows = extract_segments(
-        master_df, indexed_sessions, output_dir=raw_output_dir,
+        master_df, indexed_sessions, normalized_sessions,
         label_filter=["interictal"]
     )
-    if len(preictal_windows) == 0:
+    if len(interictal_windows) == 0:
         logger.error(f"[{split_name}] No interictal windows extracted — skipping segmentation for this split")
         return
 
     preictal_windows = montage_windows(preictal_windows)
     interictal_windows = montage_windows(interictal_windows)
 
+    logger.info(f"preictal windows {len(preictal_windows)}, interictal windows {len(interictal_windows)}")
     interictal_segments = segment_fixed(interictal_windows, SEG_TIME, SFREQ)
 
     total_len_inter = sum(w["window"].shape[1] for w in interictal_windows)
@@ -95,8 +93,8 @@ def run_pipeline_for_split(split_name, master_csv, raw_output_dir):
     preictal_dir = Path(f"preictal_{split_name}")
     interictal_dir = Path(f"interictal_{split_name}")
 
-    #deletes the existing directories if they exist so old and new segments
-    #dont get mixed up if running pipeline multiple times on the same split
+    # deletes the existing directories if they exist so old and new segments
+    # dont get mixed up if running pipeline multiple times on the same split
     if preictal_dir.exists():
         shutil.rmtree(preictal_dir)
     if interictal_dir.exists():
@@ -109,9 +107,11 @@ def run_pipeline_for_split(split_name, master_csv, raw_output_dir):
     for i, s in enumerate(interictal_segments):
         np.save(interictal_dir / f"{s['label']}_{i}.npy", s["segment"])
 
+    elapsed = time.time() - start_time
+    logger.info(f"Preprocessing Pipeline Time {elapsed}")
     logger.info(f"[{split_name}] Saved {len(preictal_segments)} preictal, "
                 f"{len(interictal_segments)} interictal segments")
-
+    
 class EEGSegmentDataset(Dataset):
     def __init__(self, preictal_dir="preictal", interictal_dir="interictal", normalize=True):
         self.files = []
@@ -169,8 +169,8 @@ def evaluate(model, loader, device, criterion):
     return avg_loss, acc, sensitivity, specificity
 
 if __name__ == "__main__":
-    run_pipeline_for_split("train", master_csv="master_full.csv", raw_output_dir="raweeg_output_train")
-    run_pipeline_for_split("dev", master_csv="master_dev.csv", raw_output_dir="raweeg_output_dev")
+    run_pipeline_for_split("train", master_csv="master_full.csv")
+    run_pipeline_for_split("dev", master_csv="master_dev.csv")
     
     train_dataset = EEGSegmentDataset("preictal_train", "interictal_train")
     dev_dataset = EEGSegmentDataset("preictal_dev", "interictal_dev")
