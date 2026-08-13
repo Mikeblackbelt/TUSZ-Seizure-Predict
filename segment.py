@@ -1,134 +1,185 @@
-import numpy as np
-import pandas as pd
-from util import handle_logs
+import argparse
+import questionary
+import subprocess
+import sys
+import os
+import json
+from pathlib import Path
+from pipeline.recording_info import get_recording_info
+from pipeline import preictal_segment
+from util import handle_logs, verify_data
+from util.handle_logs import load_config, save_config
 
-logger = handle_logs.get_logger("segment_npy", "applog")
-
-TARGET_SFREQ = 256  # must match raw_eeg_extraction.TARGET_SFREQ
-
-
-def _normalize_edf_path(edf_path):
-    """
-    Canonicalize an edf_path for matching only (never for I/O). The
-    session index is always built with the current OS's separator
-    (os.path.join), but a master CSV can be generated on a different
-    OS than the one it's later consumed on (e.g. built on Windows,
-    consumed on Linux) - a raw string-equality match would then silently
-    fail for every row. Normalizing both sides to forward slashes before
-    comparing makes matching OS-independent.
-    """
-    return str(edf_path).replace("\\", "/")
+CONFIG_FILE = "app_path.json"
 
 
-def build_edf_to_session_map(sessions):
-    """sessions: dict[session_key] -> {"edf_paths": [...]}, from index_sessions().
-    Keys are normalized (see _normalize_edf_path) for OS-independent matching."""
-    mapping = {}
-    for session_key, session in sessions.items():
-        for edf_path in session["edf_paths"]:
-            mapping[_normalize_edf_path(edf_path)] = session_key
-    return mapping
+def main():
+    # Load existing config
+    config = load_config()
+   
+    # Set up argument parser with config defaults
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "input_path",
+        type=str,
+        help="Path to the input dataset."
+    )
+    parser.add_argument(
+        "--log_path",
+        type=str,
+        default=config.get("applog", "logs\\app.log"),
+        help="Path to the log file. Default is logs\\app.log"
+    )
+    parser.add_argument(
+        "--save-config",
+        action="store_true",
+        help="Save the provided arguments as defaults to app_path.json."
+    )
+   
+    args = parser.parse_args()
+   
+    DATASET_PATH = args.input_path
+    LOG_PATH = args.log_path
+   
+    # Save config if flag is used
+    if args.save_config:
+        new_config = {
+            "input_path": DATASET_PATH,
+            "applog": LOG_PATH,
+        }
+        save_config(new_config)
+   
+    LOGGER = handle_logs.get_logger("main", LOG_PATH)
+   
+    LOGGER.info("-" * 60)
+    LOGGER.info("Starting pipeline")
+    LOGGER.info(f"Dataset path: {DATASET_PATH}")
+    LOGGER.info(f"Log path: {LOG_PATH}")
+    LOGGER.info("-" * 60)
 
+    # Input validation
+    is_valid, message = verify_data.validate_input(DATASET_PATH)
+    if not is_valid:
+        LOGGER.error(f"Input validation failed: {message}")
+        return
 
-def time_to_sample(t, offset, target_sfreq=TARGET_SFREQ):
-    """
-    Map a within-file time (seconds, relative to that edf's own start - the
-    same convention make_master_file()/add_preictal_tags() use) to a sample
-    index in the session's concatenated array. Clipped to the file's own
-    [start_sample, end_sample) span so per-file resample rounding can never
-    spill a segment into the neighboring file's samples.
-    """
-    sample = offset["start_sample"] + round(t * target_sfreq)
-    return min(max(sample, offset["start_sample"]), offset["end_sample"])
+    # Run unit tests
+    LOGGER.info("Running unit tests...")
+    result = subprocess.run([
+        sys.executable, "-m", "pytest", "testing/",
+        "-v", "--tb=short", "--no-header",
+    ])
+    if result.returncode != 0:
+        LOGGER.error("Unit tests failed. Aborted.")
+        return
+    LOGGER.info("Unit tests passed")
 
+    # Tag selection
+    LOGGER.info("Scanning for unique tags in dataset...")
+    unique_tags = list(preictal_segment.get_unique_tags(DATASET_PATH))
+    LOGGER.info(f"Available tags: {unique_tags}")
 
-def extract_segments(master_df, sessions, session_data, label_filter=None,
-                     is_valid_filter=True, dedup_channels=True):
-    """
-    Slice labeled segments out of per-session concatenated in-memory arrays
-    using the time annotations in master_df (e.g. master_full.csv).
+    selected_tags = questionary.checkbox(
+        "Select all tags to make new preictal tags",
+        choices=unique_tags,
+    ).ask()
 
-    Parameters:
-        master_df: rows already filtered/loaded from master_full.csv.
-        sessions: dict from index_sessions(), used to map edf_path -> session_key.
-        session_data: dict[session_key] -> (combined, file_offsets), i.e. the
-            exact (np.ndarray, list[dict]) tuple returned by
-            raw_eeg_extraction.concatenate_session_eeg() for that session.
-            Nothing is read from disk here - the raw arrays are expected to
-            still be held in memory from the extraction step.
-        label_filter: optional iterable of exact label values to keep.
-        is_valid_filter: if True (default) only keep the valid segments 
-        in ictal (all since it's already from the csv files), preictal, interictal  
-        dedup_channels: if True (default), collapse rows that share the
-            same (edf_path, start_time, stop_time, label) - i.e. the same
-            segment annotated once per channel - into a single full-channel
-            extraction. If False, slice once per row (still full-channel;
-            `channel` is carried through as metadata either way since the
-            array itself is never split by channel here).
+    LOGGER.info(f"User selected tags: {selected_tags}")
 
-    Returns:
-        list of dicts: {"segment": np.ndarray (N_TARGET_CHANNELS, n_samples),
-                         "label": str, "is_valid": bool, "edf_path": str,
-                         "start_time": float, "stop_time": float,
-                         "channels": list[str]}
-    """
-    df = master_df
-    if label_filter is not None:
-        df = df[df["label"].isin(label_filter)]
-    if is_valid_filter is not None:
-        df = df[df["is_valid"] == is_valid_filter]
+    # Timing parameters (SOP and SPH)
+    sop = float(
+        questionary.text(
+            "SOP - buffer/safety clearance before seizure onset (seconds):",
+            default="120"
+        ).ask()
+    )
+    LOGGER.info(f"SOP buffer: {sop}s")
 
-    if dedup_channels:
-        grouped = (
-            df.groupby(["edf_path", "start_time", "stop_time", "label", "is_valid"])["channel"]
-            .apply(list)
-            .reset_index()
-            .rename(columns={"channel": "channels"})
+    sph = float(
+        questionary.text(
+            "SPH - preictal window length to extract (seconds):",
+            default="420"
+        ).ask()
+    )
+    LOGGER.info(f"SPH preictal duration: {sph}s")
+
+    # Optional Exclusion Intervals (Postictal)
+    use_exclusions = questionary.confirm(
+        "Add exclusion (postictal) intervals?", 
+        default=True
+    ).ask()
+
+    if use_exclusions:
+        post_time = float(
+            questionary.text(
+                "Postictal exclusion time (seconds):", 
+                default="1800"
+            ).ask()
         )
+        LOGGER.info(f"Postictal exclusion duration: {post_time}s")
     else:
-        grouped = df.copy()
-        grouped["channels"] = grouped["channel"].apply(lambda c: [c])
+        post_time = None
 
-    edf_to_session = build_edf_to_session_map(sessions)
+    # Output path
+    new_master_path = questionary.text(
+        "Output master file path:", 
+        default="master_full.csv"
+    ).ask()
+    LOGGER.info(f"Output path: {new_master_path}")
 
-    results = []
-    for edf_path, group in grouped.groupby("edf_path"):
-        edf_path_norm = _normalize_edf_path(edf_path)
+    # Build master file
+    LOGGER.info("Building master file...")
+    master_df = preictal_segment.make_master_file(
+        DATASET_PATH,
+        output_path=new_master_path,
+        allow_tag=selected_tags,
+    )
+    LOGGER.info("Master file built")
 
-        session_key = edf_to_session.get(edf_path_norm)
-        if session_key is None:
-            logger.warning(f"No session found for {edf_path} - skipping {len(group)} segments")
-            continue
+    # Normalize edf_path separators immediately, before anything else reads
+    # or persists this column. make_master_file builds paths with the
+    # current OS's os.path.join, so a master CSV built on Windows stores
+    # backslash paths and one built on Linux stores forward-slash paths -
+    # if the pipeline later runs on a different OS than the one that built
+    # this CSV, downstream string-equality matching (extract_segments)
+    # would silently fail for every row. Forward slashes are accepted by
+    # both Windows and Linux file APIs, so normalizing here doesn't break
+    # the get_recording_info() reads below on either OS, and every master
+    # CSV this script writes from now on is OS-independent by construction.
+    master_df["edf_path"] = master_df["edf_path"].astype(str).str.replace("\\", "/", regex=False)
 
-        session_entry = session_data.get(session_key)
-        if session_entry is None:
-            logger.warning(f"No in-memory data for session {session_key} - skipping {len(group)} segments")
-            continue
+    # Add preictal tags
+    LOGGER.info("Adding preictal tags...")
+    master_df = preictal_segment.add_preictal_tags(
+        master_df, sph=sph, sop=sop, postictal_time=post_time
+    )
 
-        combined, file_offsets = session_entry
-        offsets_by_edf = {_normalize_edf_path(o["edf_path"]): o for o in file_offsets}
+    # Optional Exclusion Intervals
+    if use_exclusions and post_time is not None:
+        LOGGER.info("Adding exclusion intervals...")
+        master_df = preictal_segment.add_exclusion_intervals(
+            master_df=master_df,
+            postictal_time=post_time,
+        )
 
-        offset = offsets_by_edf.get(edf_path_norm)
-        if offset is None:
-            logger.warning(f"No file offset recorded for {edf_path} in session {session_key} - skipping")
-            continue
+    LOGGER.info("Computing recording durations...")
+    recording_durations = {}
+    for edf_path in master_df["edf_path"].unique():
+        info = get_recording_info(edf_path)
+        recording_durations[edf_path] = info["n_times"] / info["sfreq"]
 
-        for _, row in group.iterrows():
-            start_sample = time_to_sample(row["start_time"], offset)
-            stop_sample = time_to_sample(row["stop_time"], offset)
-            if stop_sample <= start_sample:
-                logger.warning(f"Degenerate segments for {edf_path} {row['label']} - skipping")
-                continue
+    LOGGER.info("Adding interictal tags...")
+    master_df = preictal_segment.add_interictal_tags(
+        master_df, recording_durations
+    )
+    # Save result
+    master_df.to_csv(new_master_path, index=False)
+    
+    LOGGER.info("-" * 60)
+    LOGGER.info(f"Pipeline complete - output at {new_master_path}")
+    LOGGER.info(f"Output saved to: {new_master_path} ({len(master_df)} rows)")
+    LOGGER.info("-" * 60)
 
-            results.append({
-                "segment": combined[:, start_sample:stop_sample],
-                "label": row["label"],
-                "is_valid": row["is_valid"],
-                "edf_path": edf_path,
-                "start_time": row["start_time"],
-                "stop_time": row["stop_time"],
-                "channels": row["channels"],
-            })
 
-    logger.info(f"Extracted {len(results)} segments ({'deduped' if dedup_channels else 'per-row'})")
-    return results
+if __name__ == "__main__":
+    main()
