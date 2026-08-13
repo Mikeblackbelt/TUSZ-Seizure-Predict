@@ -30,7 +30,7 @@ SPLITS = ["train", "dev"]
 MASTER_FILE_TEMPLATE = "master_{split}.csv"
 MASTER_FILE_OVERRIDE = None  # e.g. "master_full.csv" to force one file for all splits
 
-MAX_SESSIONS = {"train": 50, "dev": 50}  # None to disable the cap for a split
+MAX_SESSIONS = {"train": None, "dev": None}  # None to disable the cap for a split
 
 SEG_TIME = 64.0
 SFREQ = 256
