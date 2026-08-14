@@ -36,7 +36,7 @@ SEG_TIME = 64.0
 SFREQ = 256
 
 FEATURE_OUTPUT_DIR = "processed_data/features"
-FINAL_OUTPUT_FILE = "test_inputs.mat"
+FINAL_OUTPUT_FILE = "processed_eeg.mat"
 
 
 def det_entropy(channel_data):
@@ -74,39 +74,6 @@ def gen_time_domain_features(data):
 
 # ------------------ PER-SPLIT EXTRACTION ------------------
 
-def build_session_data(split):
-    """Index a split's sessions and concatenate each one's raw EEG in
-    memory (no raw checkpoint is written to disk - see raw_eeg_extraction).
-    Returns (indexed_sessions, session_data)."""
-    indexed_sessions = index_sessions(split)
-
-    cap = MAX_SESSIONS.get(split)
-    if cap is not None:
-        session_keys = list(indexed_sessions.keys())[:cap]
-        indexed_sessions = {k: indexed_sessions[k] for k in session_keys}
-
-    session_data = {}
-    for key, session in indexed_sessions.items():
-        logger.info(f"[{split}] at key {key}")
-        logger.info(f"[{split}]   {len(session['edf_paths'])} .edf files")
-
-        start_time = time.time()
-        result, file_offsets = concatenate_session_eeg(session)
-        elapsed = time.time() - start_time
-
-        if result is not None:
-            session_data[key] = (result, file_offsets)
-            logger.info(f"[{split}] Shape: {result.shape}")
-            logger.info(f"[{split}] Time consumed: {elapsed:.2f} seconds")
-        else:
-            logger.warning(f"[{split}] No .edf files in session {key}")
-
-        metadata = extract_session_metadata(session)
-        logger.info(f"[{split}] Metadata for {key}: {metadata}")
-
-    return indexed_sessions, session_data
-
-
 def montage_windows(windows, split):
     montaged = []
     for w in windows:
@@ -127,9 +94,17 @@ def montage_windows(windows, split):
 
 def process_split(split):
     """
-    Runs one split (train or dev) end to end: index -> concatenate ->
-    extract preictal/interictal windows -> bipolar montage -> fixed
-    segmentation -> save to preictal_{split}/ and interictal_{split}/.
+    Runs one split (train or dev) end to end, one session at a time:
+    concatenate a single session's raw EEG in memory -> extract that
+    session's preictal/interictal windows -> bipolar montage -> fixed
+    segmentation -> save to preictal_{split}/ and interictal_{split}/ ->
+    discard the raw array -> move to the next session.
+
+    This intentionally never holds more than one session's raw array in
+    memory at a time (the previous version built a session_data dict for
+    the whole split up front, which meant every session's full raw array
+    stayed resident simultaneously - the actual cause of the OOM kill,
+    not the per-file duplication inside concatenate_session_eeg).
 
     Returns (n_preictal_segments, n_interictal_segments) actually written.
     """
@@ -140,52 +115,95 @@ def process_split(split):
 
     master_df = pd.read_csv(master_path)
 
-    indexed_sessions, session_data = build_session_data(split)
-    if not session_data:
-        logger.warning(f"[{split}] No sessions produced usable EEG data - skipping split")
-        return 0, 0
-
     preictal_labels = [
         l for l in master_df["label"].unique()
         if l.startswith("p") and not l.endswith("_sopbuffer")
     ]
 
-    preictal_windows = extract_segments(
-        master_df, indexed_sessions, session_data, label_filter=preictal_labels
-    )
-    interictal_windows = extract_segments(
-        master_df, indexed_sessions, session_data, label_filter=["interictal"]
-    )
-
-    if not preictal_windows:
-        logger.warning(f"[{split}] extract_segments returned 0 preictal windows")
-    if not interictal_windows:
-        logger.warning(f"[{split}] extract_segments returned 0 interictal windows")
-
-    preictal_windows = montage_windows(preictal_windows, split)
-    interictal_windows = montage_windows(interictal_windows, split)
-
-    interictal_segments = segment_fixed(interictal_windows, SEG_TIME, SFREQ)
-    preictal_segments = segment_fixed(
-        preictal_windows, SEG_TIME, SFREQ, step_time=SEG_TIME / 2
-    )
+    indexed_sessions = index_sessions(split)
+    cap = MAX_SESSIONS.get(split)
+    if cap is not None:
+        session_keys = list(indexed_sessions.keys())[:cap]
+        indexed_sessions = {k: indexed_sessions[k] for k in session_keys}
 
     preictal_dir = Path(f"preictal_{split}")
     interictal_dir = Path(f"interictal_{split}")
     preictal_dir.mkdir(exist_ok=True)
     interictal_dir.mkdir(exist_ok=True)
 
-    for i, s in enumerate(preictal_segments):
-        np.save(preictal_dir / f"{s['label']}_{i}.npy", s["segment"])
-    for i, s in enumerate(interictal_segments):
-        np.save(interictal_dir / f"{s['label']}_{i}.npy", s["segment"])
+    n_preictal_written = 0
+    n_interictal_written = 0
+    n_sessions_with_data = 0
+
+    for key, session in indexed_sessions.items():
+        logger.info(f"[{split}] at key {key}")
+        logger.info(f"[{split}]   {len(session['edf_paths'])} .edf files")
+
+        start_time = time.time()
+        result, file_offsets = concatenate_session_eeg(session)
+        elapsed = time.time() - start_time
+
+        if result is None:
+            logger.warning(f"[{split}] No .edf files in session {key}")
+            continue
+
+        logger.info(f"[{split}] Shape: {result.shape}")
+        logger.info(f"[{split}] Time consumed: {elapsed:.2f} seconds")
+
+        metadata = extract_session_metadata(session)
+        logger.info(f"[{split}] Metadata for {key}: {metadata}")
+
+        # Single-session view: extract_segments only needs the one
+        # session's entries to resolve this session's edf_path -> array.
+        session_only = {key: session}
+        session_data_only = {key: (result, file_offsets)}
+
+        preictal_windows = extract_segments(
+            master_df, session_only, session_data_only, label_filter=preictal_labels
+        )
+        interictal_windows = extract_segments(
+            master_df, session_only, session_data_only, label_filter=["interictal"]
+        )
+
+        # Raw array no longer needed past this point - drop the only
+        # references to it before moving on to the next session.
+        del result, session_data_only
+        n_sessions_with_data += 1
+
+        if not preictal_windows and not interictal_windows:
+            logger.debug(f"[{split}] {key}: no preictal or interictal windows")
+            continue
+
+        preictal_windows = montage_windows(preictal_windows, split)
+        interictal_windows = montage_windows(interictal_windows, split)
+
+        interictal_segments = segment_fixed(interictal_windows, SEG_TIME, SFREQ)
+        preictal_segments = segment_fixed(
+            preictal_windows, SEG_TIME, SFREQ, step_time=SEG_TIME / 2
+        )
+
+        for s in preictal_segments:
+            np.save(preictal_dir / f"{s['label']}_{n_preictal_written}.npy", s["segment"])
+            n_preictal_written += 1
+        for s in interictal_segments:
+            np.save(interictal_dir / f"{s['label']}_{n_interictal_written}.npy", s["segment"])
+            n_interictal_written += 1
+
+    if n_sessions_with_data == 0:
+        logger.warning(f"[{split}] No sessions produced usable EEG data - skipping split")
+        return 0, 0
+
+    if n_preictal_written == 0:
+        logger.warning(f"[{split}] 0 preictal segments written across all sessions")
+    if n_interictal_written == 0:
+        logger.warning(f"[{split}] 0 interictal segments written across all sessions")
 
     logger.info(
-        f"[{split}] wrote {len(preictal_segments)} preictal segments to {preictal_dir}, "
-        f"{len(interictal_segments)} interictal segments to {interictal_dir}"
+        f"[{split}] wrote {n_preictal_written} preictal segments to {preictal_dir}, "
+        f"{n_interictal_written} interictal segments to {interictal_dir}"
     )
 
-    return len(preictal_segments), len(interictal_segments)
+    return n_preictal_written, n_interictal_written
 
 
 # ------------------ FEATURE EXTRACTION ------------------
@@ -272,19 +290,19 @@ def run_pca_and_export_mat():
     compressed = pca.fit_transform(all_features)  # (N, n_components)
 
     # MATLAB expects (n_components x N)
-    test_data = compressed.T
-    test_labels = labels
-    test_splits = splits  # 0=train, 1=dev
-    n_samples = test_data.shape[1]
+    features_out = compressed.T
+    labels_out = labels
+    splits_out = splits  # 0=train, 1=dev
+    n_samples = features_out.shape[1]
 
     savemat(FINAL_OUTPUT_FILE, {
-        "test_data": test_data,
-        "test_labels": test_labels,
-        "test_splits": test_splits,
+        "features": features_out,
+        "labels": labels_out,
+        "splits": splits_out,
         "n_samples": n_samples,
     })
 
-    print(f"Saved {FINAL_OUTPUT_FILE} with shape:", test_data.shape)
+    print(f"Saved {FINAL_OUTPUT_FILE} with shape:", features_out.shape)
     return True
 
 
