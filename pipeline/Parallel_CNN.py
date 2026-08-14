@@ -17,7 +17,7 @@ from scipy.stats import kurtosis, skew
 from sklearn.decomposition import PCA
 import sys
 
-logger = handle_logs.get_logger("slimseiz", "applog")
+logger = handle_logs.get_logger("Parallel_CNN", "applog")
 
 # ------------------ CONFIG ------------------
 
