@@ -16,7 +16,6 @@ import numpy as np
 from scipy.stats import kurtosis, skew
 from sklearn.decomposition import PCA
 import sys
-from scipy.io import savemat
 
 logger = handle_logs.get_logger("slimseiz", "applog")
 
@@ -36,7 +35,16 @@ SEG_TIME = 64.0
 SFREQ = 256
 
 FEATURE_OUTPUT_DIR = "processed_data/features"
-FINAL_OUTPUT_FILE = "processed_eeg.mat"
+
+# MATLAB side (experiment_runs_low_res.m) loads these via fscanf with a
+# hard-coded shape of [64, N] - not a .mat file. testdata.txt is
+# 64 x N whitespace-separated floats, testlabel.txt is 1 x N.
+# Label convention matches that loader: 0=preictal, 1=interictal.
+TESTDATA_FILE = "MATLAB_simulations/testPytorch/testdata.txt"
+TESTLABEL_FILE = "MATLAB_simulations/testPytorch/testlabel.txt"
+
+N_PCA_COMPONENTS = 64  # hard requirement - the MATLAB loader assumes exactly 64 rows
+NORM_RANGE = (-1.2, 1.2)  # matches the expected input range before quantization
 
 
 def det_entropy(channel_data):
@@ -133,6 +141,8 @@ def process_split(split):
 
     n_preictal_written = 0
     n_interictal_written = 0
+    n_preictal_windows_total = 0
+    n_interictal_windows_total = 0
     n_sessions_with_data = 0
 
     for key, session in indexed_sessions.items():
@@ -170,6 +180,9 @@ def process_split(split):
         del result, session_data_only
         n_sessions_with_data += 1
 
+        n_preictal_windows_total += len(preictal_windows)
+        n_interictal_windows_total += len(interictal_windows)
+
         if not preictal_windows and not interictal_windows:
             logger.debug(f"[{split}] {key}: no preictal or interictal windows")
             continue
@@ -199,8 +212,14 @@ def process_split(split):
         logger.warning(f"[{split}] 0 interictal segments written across all sessions")
 
     logger.info(
-        f"[{split}] wrote {n_preictal_written} preictal segments to {preictal_dir}, "
-        f"{n_interictal_written} interictal segments to {interictal_dir}"
+        f"[{split}] raw windows (pre-segmentation): "
+        f"{n_preictal_windows_total} preictal, {n_interictal_windows_total} interictal"
+    )
+    logger.info(
+        f"[{split}] wrote {n_preictal_written} preictal segments to {preictal_dir} "
+        f"(from {n_preictal_windows_total} windows), "
+        f"{n_interictal_written} interictal segments to {interictal_dir} "
+        f"(from {n_interictal_windows_total} windows)"
     )
 
     return n_preictal_written, n_interictal_written
@@ -211,7 +230,7 @@ def process_split(split):
 def run_feature_extraction(split):
     """Reads preictal_{split}/ and interictal_{split}/, writes per-file
     feature vectors into FEATURE_OUTPUT_DIR, tagged with split+label so
-    run_pca_and_export_mat() can recover both from the filename."""
+    run_pca_and_export_matlab_inputs() can recover both from the filename."""
     Path(FEATURE_OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
     for label_prefix, src_dir in (("preictal", f"preictal_{split}"), ("interictal", f"interictal_{split}")):
@@ -236,7 +255,7 @@ def run_feature_extraction(split):
 
 # ------------------ PCA + MAT EXPORT ------------------
 
-def run_pca_and_export_mat():
+def run_pca_and_export_matlab_inputs():
     files = sorted(glob.glob(os.path.join(FEATURE_OUTPUT_DIR, "*.npy")))
 
     all_features = []
@@ -251,15 +270,16 @@ def run_pca_and_export_mat():
             logger.warning(f"Skipping feature file with unrecognized split prefix: {base}")
             continue
 
+        # Label convention matches the MATLAB loader: 0=preictal, 1=interictal.
         if f"{split}_preictal_" in base:
-            label = 1
-        elif f"{split}_interictal_" in base:
             label = 0
+        elif f"{split}_interictal_" in base:
+            label = 1
         else:
             logger.warning(f"Skipping feature file with unrecognized label prefix: {base}")
             continue
 
-        all_features.append(np.load(f))  # (176,)
+        all_features.append(np.load(f))  # (160,) for the bipolar montage's 20 channels x 8 stats
         labels.append(label)
         splits.append(0 if split == "train" else 1)
 
@@ -273,48 +293,67 @@ def run_pca_and_export_mat():
         print(f"No feature files found under {FEATURE_OUTPUT_DIR} - aborting before PCA.")
         return False
 
-    all_features = np.vstack(all_features)  # (N, 176)
+    all_features = np.vstack(all_features)  # (N, 160)
     labels = np.array(labels)
     splits = np.array(splits)
 
     print("All features shape:", all_features.shape)
 
-    n_components = min(64, all_features.shape[0], all_features.shape[1])
-    if n_components < 64:
-        logger.warning(
-            f"Only {all_features.shape[0]} samples / {all_features.shape[1]} dims available - "
-            f"using n_components={n_components} instead of 64"
+    # Hard requirement: the MATLAB loader assumes exactly 64 rows
+    # (testdata = fscanf(..., [64, N])). Silently falling back to fewer
+    # components would produce a file that loads into the wrong shape
+    # without any error - fail loudly here instead, since "not enough
+    # samples yet" is a clearer signal than a corrupted downstream load.
+    if all_features.shape[0] < N_PCA_COMPONENTS or all_features.shape[1] < N_PCA_COMPONENTS:
+        raise ValueError(
+            f"Need at least {N_PCA_COMPONENTS} samples and {N_PCA_COMPONENTS} feature "
+            f"dims to fit a {N_PCA_COMPONENTS}-component PCA, got "
+            f"{all_features.shape[0]} samples x {all_features.shape[1]} dims. "
+            f"The MATLAB simulation expects a fixed [64, N] input - reduce "
+            f"N_PCA_COMPONENTS only if you deliberately want to change what the "
+            f"MATLAB side reads."
         )
 
-    pca = PCA(n_components=n_components)
-    compressed = pca.fit_transform(all_features)  # (N, n_components)
+    pca = PCA(n_components=N_PCA_COMPONENTS)
+    compressed = pca.fit_transform(all_features)  # (N, 64)
 
-    # MATLAB expects (n_components x N)
+    # MATLAB expects (64 x N)
     features_out = compressed.T
-    labels_out = labels
-    splits_out = splits  # 0=train, 1=dev
-    n_samples = features_out.shape[1]
 
-    savemat(FINAL_OUTPUT_FILE, {
-        "features": features_out,
-        "labels": labels_out,
-        "splits": splits_out,
-        "n_samples": n_samples,
-    })
+    # Normalize to NORM_RANGE per the reference pipeline, fit on train only
+    # to avoid leaking dev-split scale into the training distribution, then
+    # applied to the full (train+dev) array before writing.
+    train_mask = splits == 0
+    train_features = features_out[:, train_mask]
+    train_min = train_features.min()
+    train_max = train_features.max()
+    if train_max == train_min:
+        raise ValueError("All train-split PCA features are identical - cannot normalize (zero range)")
 
-    print(f"Saved {FINAL_OUTPUT_FILE} with shape:", features_out.shape)
+    lo, hi = NORM_RANGE
+    features_norm = (features_out - train_min) / (train_max - train_min)  # -> [0, 1]
+    features_norm = features_norm * (hi - lo) + lo  # -> [lo, hi]
+
+    Path(TESTDATA_FILE).parent.mkdir(parents=True, exist_ok=True)
+    Path(TESTLABEL_FILE).parent.mkdir(parents=True, exist_ok=True)
+
+    np.savetxt(TESTDATA_FILE, features_norm, fmt="%f")
+    np.savetxt(TESTLABEL_FILE, labels.reshape(1, -1), fmt="%f")
+
+    print(f"Saved {TESTDATA_FILE} with shape:", features_norm.shape)
+    print(f"Saved {TESTLABEL_FILE} with shape:", labels.reshape(1, -1).shape)
     return True
 
 
 # ------------------ MAIN PIPELINE ------------------
 
 if __name__ == "__main__":
-    if os.path.exists(FINAL_OUTPUT_FILE):
-        logger.info(f"Final output '{FINAL_OUTPUT_FILE}' already exists. Skipping pipeline.")
-        print(f"'{FINAL_OUTPUT_FILE}' found! Skipping data extraction and processing.")
+    if os.path.exists(TESTDATA_FILE) and os.path.exists(TESTLABEL_FILE):
+        logger.info(f"Final outputs '{TESTDATA_FILE}'/'{TESTLABEL_FILE}' already exist. Skipping pipeline.")
+        print(f"'{TESTDATA_FILE}' and '{TESTLABEL_FILE}' found! Skipping data extraction and processing.")
         sys.exit(0)
 
-    print(f"'{FINAL_OUTPUT_FILE}' not found. Starting the pipeline...")
+    print(f"'{TESTDATA_FILE}' not found. Starting the pipeline...")
 
     for split in SPLITS:
         n_pre, n_inter = process_split(split)
@@ -323,6 +362,6 @@ if __name__ == "__main__":
     for split in SPLITS:
         run_feature_extraction(split)
 
-    ok = run_pca_and_export_mat()
+    ok = run_pca_and_export_matlab_inputs()
     if not ok:
         sys.exit(1)
