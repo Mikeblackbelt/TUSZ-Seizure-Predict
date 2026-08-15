@@ -136,6 +136,18 @@ def main():
     )
     LOGGER.info("Master file built")
 
+    # Normalize edf_path separators immediately, before anything else reads
+    # or persists this column. make_master_file builds paths with the
+    # current OS's os.path.join, so a master CSV built on Windows stores
+    # backslash paths and one built on Linux stores forward-slash paths -
+    # if the pipeline later runs on a different OS than the one that built
+    # this CSV, downstream string-equality matching (extract_segments)
+    # would silently fail for every row. Forward slashes are accepted by
+    # both Windows and Linux file APIs, so normalizing here doesn't break
+    # the get_recording_info() reads below on either OS, and every master
+    # CSV this script writes from now on is OS-independent by construction.
+    master_df["edf_path"] = master_df["edf_path"].astype(str).str.replace("\\", "/", regex=False)
+
     # Add preictal tags
     LOGGER.info("Adding preictal tags...")
     master_df = preictal_segment.add_preictal_tags(
