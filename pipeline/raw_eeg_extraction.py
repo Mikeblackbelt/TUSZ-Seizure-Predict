@@ -21,6 +21,7 @@ def concatenate_session_eeg(
     notch_power_percentile=80,
     bandpass_low=0.5,
     bandpass_high=40.0,
+    postprocess_fn=None,
 ):
     """
     Reads a session's .edf files, filters + resamples each directly to
@@ -43,6 +44,12 @@ def concatenate_session_eeg(
             adaptive_filters.detect_noise_frequencies().
         bandpass_low, bandpass_high: passed through to
             simple_filters.bandpass_filter_raw().
+        postprocess_fn (callable, optional): If given, called as
+            `postprocess_fn(combined, TARGET_SFREQ)` on the fully
+            concatenated+resampled array before it's saved, and its return
+            value is what actually gets checkpointed (e.g. artifact
+            zero/interpolation masking). Left as a no-op by default so this
+            function's behavior is unchanged unless a caller opts in.
 
     Returns:
         np.ndarray of shape (N_TARGET_CHANNELS, total_resampled_samples), or None if
@@ -111,6 +118,9 @@ def concatenate_session_eeg(
         f"Successfully concatenated {len(edf_paths)} recordings into "
         f"resampled {combined.shape} array"
     )
+
+    if postprocess_fn is not None:
+        combined = postprocess_fn(combined, TARGET_SFREQ)
 
     if output_dir is not None:
         if not session_key:

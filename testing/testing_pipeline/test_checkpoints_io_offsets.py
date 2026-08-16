@@ -1,4 +1,5 @@
 import json
+import numpy as np
 import pytest
 
 from pipeline import checkpoint_io
@@ -34,3 +35,14 @@ def test_save_offsets_creates_output_dir(dataset_dir):
 def test_load_offsets_missing_file_raises(dataset_dir):
     with pytest.raises(FileNotFoundError):
         checkpoint_io.load_offsets("nonexistent_session", str(dataset_dir))
+
+
+def test_save_checkpoint_stores_compact_float32(tmp_path):
+    array = np.arange(12, dtype=np.float64).reshape(3, 4)
+
+    out_path = checkpoint_io.save_checkpoint(array, "sess003", str(tmp_path), stage="raw")
+
+    with np.load(out_path) as data:
+        saved = data["data"]
+        assert saved.dtype == np.float32
+        assert np.allclose(saved, array.astype(np.float32))
