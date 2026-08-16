@@ -6,6 +6,14 @@ logger = handle_logs.get_logger("make_master_file", "applog")
 
 SPLITS = ("train", "dev", "eval")
 
+# Labels that do NOT count as reliable annotation coverage when deriving
+# background windows -- i.e. a span carrying only one of these labels is
+# treated the same as a span with no label at all. "bckg" is TUSZ's own
+# background tag, but per project findings it does not reliably indicate
+# artifact-free background (it's an artifact-flagged label, not a clean
+# negative-class signal), so it must not be trusted as coverage.
+DEFAULT_UNRELIABLE_LABELS = ("bckg",)
+
 
 def get_split(path):
     """
@@ -326,13 +334,19 @@ def resolve_overlaps(df: pd.DataFrame) -> pd.DataFrame:
     def _get_label_priority(label):
         lbl = str(label)
         if lbl.startswith('x'):
-            return 5
+            return 6
         if lbl.startswith('c'):
-            return 4
+            return 5
         if lbl.startswith('p'):
-            return 3
+            return 4
         if lbl.startswith('q'):
             return 1
+        # Derived background windows (see add_background_tags) are the
+        # lowest priority -- they fill gaps with no reliable label, so any
+        # real annotation (including the original "bckg" tag) should win
+        # if boundaries ever coincide exactly.
+        if lbl.startswith('bg'):
+            return 0
         return 2
     
     df = df.copy()
@@ -352,3 +366,166 @@ def resolve_overlaps(df: pd.DataFrame) -> pd.DataFrame:
     
     logger.info(f"Overlap resolution complete. Final row count: {len(df)}")
     return df
+
+
+def _get_edf_duration_seconds(edf_path, cache):
+    """
+    Header-only lookup (no data preload) of an .edf recording's duration in
+    seconds, memoized in `cache` since multiple channel groups share the
+    same file.
+    """
+    if edf_path in cache:
+        return cache[edf_path]
+
+    # Imported lazily so this module stays importable (e.g. for unit tests
+    # on the tag-generation logic) in environments without mne installed.
+    from pipeline.recording_info import get_recording_info
+
+    try:
+        info = get_recording_info(edf_path)
+        duration = float(info["n_times"]) / float(info["sfreq"])
+    except Exception as e:
+        logger.error(f"Could not read duration for {edf_path}: {e}")
+        duration = None
+
+    cache[edf_path] = duration
+    return duration
+
+
+def add_background_tags(
+    master_df: pd.DataFrame,
+    window_duration: float,
+    stride: float = None,
+    min_gap: float = None,
+    label: str = "bg",
+    unreliable_labels=DEFAULT_UNRELIABLE_LABELS,
+    duration_cache: dict = None,
+) -> pd.DataFrame:
+    """
+    Derive explicit background/negative-class windows from the stretches of
+    each recording that carry NO reliable label at all -- not from the
+    "bckg" tag, which is an artifact-flagged label and is not trustworthy as
+    a clean negative-class signal (any label in `unreliable_labels` is
+    treated as if that span were unlabeled).
+
+    For every (edf_path, channel) group of ORIGINAL rows (status == -1,
+    excluding any previously generated p*/q*/c*/x* rows):
+      1. Reads the recording's true duration from its .edf header (not just
+         the span covered by annotations), so background before the first
+         event / after the last event is captured too, not only gaps
+         between events.
+      2. Computes the complement of the "reliable" (non-unreliable-labeled)
+         intervals over [0, duration].
+      3. Chops every gap >= min_gap into consecutive `window_duration`
+         second windows (stride `stride`, default = window_duration i.e.
+         non-overlapping) -- so a single long gap becomes MANY background
+         training rows proportional to its length, the same way preictal
+         windows are already one-per-event, instead of collapsing to a
+         single row regardless of duration.
+
+    Parameters:
+        master_df: DataFrame as returned by make_master_file (+ any tags
+            already added -- this only reads original rows regardless of
+            what's already been layered on).
+        window_duration: Length, in seconds, of each generated background
+            row -- should match (or be a multiple of) the model's window
+            length.
+        stride: Step, in seconds, between consecutive generated windows
+            within a gap. Defaults to `window_duration` (non-overlapping).
+        min_gap: Minimum gap length, in seconds, worth tagging at all.
+            Defaults to `window_duration` (shorter gaps can't fit a window).
+        label: Label to assign generated rows (default "bg"). Kept distinct
+            from "bckg" so downstream code can tell true derived background
+            apart from the original (unreliable) tag.
+        unreliable_labels: Labels that do NOT block a background window
+            from being generated over their span (default: ("bckg",)).
+        duration_cache: Optional dict to memoize edf duration lookups
+            across multiple calls.
+
+    Returns:
+        master_df with the generated background rows appended (status=1).
+        Original rows, including any "bckg" rows already in master_df, are
+        left untouched -- this only ADDS new "bg" rows, it doesn't remove
+        or relabel anything.
+    """
+    if master_df.empty:
+        return master_df.copy()
+
+    stride = stride if stride is not None else window_duration
+    min_gap = min_gap if min_gap is not None else window_duration
+    if window_duration <= 0 or stride <= 0:
+        raise ValueError(f"window_duration and stride must be positive, got {window_duration}, {stride}")
+
+    cache = duration_cache if duration_cache is not None else {}
+
+    original_rows = master_df[
+        ~master_df["label"].astype(str).str.startswith(("p", "q", "c", "x", "bg"))
+    ]
+
+    generated = []
+    skipped_no_duration = 0
+
+    for (edf_path, channel), group in original_rows.groupby(["edf_path", "channel"], sort=False):
+        duration = _get_edf_duration_seconds(edf_path, cache)
+        if duration is None or duration <= 0:
+            skipped_no_duration += 1
+            continue
+
+        group = group.sort_values(by=["start_time"])
+        reliable = group[~group["label"].astype(str).isin(unreliable_labels)]
+
+        # Merge reliable intervals, clipped to [0, duration], to find the complement.
+        covered = []
+        for _, row in reliable.sort_values(by=["start_time"]).iterrows():
+            s = max(0.0, float(row["start_time"]))
+            e = min(duration, float(row["stop_time"]))
+            if e <= s:
+                continue
+            if covered and s <= covered[-1][1]:
+                covered[-1] = (covered[-1][0], max(covered[-1][1], e))
+            else:
+                covered.append((s, e))
+
+        gaps = []
+        cursor = 0.0
+        for s, e in covered:
+            if s > cursor:
+                gaps.append((cursor, s))
+            cursor = max(cursor, e)
+        if cursor < duration:
+            gaps.append((cursor, duration))
+
+        # Template row for columns we need to carry forward (split, csv_path, ...)
+        template = group.iloc[0].to_dict()
+
+        for gap_start, gap_end in gaps:
+            if (gap_end - gap_start) < min_gap:
+                continue
+            t = gap_start
+            while t + window_duration <= gap_end:
+                bg_row = dict(template)
+                bg_row["label"] = label
+                bg_row["start_time"] = t
+                bg_row["stop_time"] = t + window_duration
+                bg_row["status"] = 1
+                if "confidence" in bg_row:
+                    bg_row["confidence"] = 1.0
+                generated.append(bg_row)
+                t += stride
+
+    logger.info(
+        f"add_background_tags: generated {len(generated)} '{label}' rows "
+        f"({skipped_no_duration} (edf_path, channel) groups skipped - no readable duration)"
+    )
+
+    if not generated:
+        return master_df.copy()
+
+    result_df = pd.concat([master_df.copy(), pd.DataFrame(generated)], ignore_index=True)
+    if all(col in result_df.columns for col in ["split", "edf_path", "channel", "start_time"]):
+        result_df = result_df.sort_values(
+            by=["split", "edf_path", "channel", "start_time"],
+            ascending=[True, True, True, True],
+        ).reset_index(drop=True)
+
+    return result_df
