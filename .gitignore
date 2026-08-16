@@ -6,7 +6,11 @@ TESTING_raweeg_output
 train
 train 
 raweeg_output
+test
+preictal
+interictal
 bipolar_montages
+master_full.csv
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
