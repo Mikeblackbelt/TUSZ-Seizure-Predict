@@ -50,7 +50,7 @@ master_df = preictal_segment.make_master_file(
     allow_tag=tags,          # or a subset of tags
 )
 master_df = preictal_segment.add_preictal_tags(
-    master_df, start_cutoff=300, max_duration=600,
+    master_df, sph=600, sop=300, postictal_time=300
 )
 master_df = preictal_segment.add_postictal_and_consecutive(
     master_df, postictal_length=300, preictal_length=600,
@@ -84,19 +84,12 @@ Writes the combined result to `output_path` and returns it as a DataFrame. Retur
 
 `status == -1` always identifies an original TUSZ row, never a generated one.
 
-#### `add_preictal_tags(master_df, start_cutoff, max_duration)`
+#### `add_preictal_tags(master_df, sph, sop, postictal_time=None)`
 
-For every row in `master_df`, generates a corresponding preictal row labeled `p{original_label}` (e.g. `fnsz` → `pfnsz`), representing the window of time *before* the seizure that a model should learn to recognize as a warning sign.
-
-The window is computed as:
-
-```
-raw_end   = ictal_start - start_cutoff
-raw_start = raw_end - max_duration
-```
-
-- `start_cutoff` - gap (in seconds) between the seizure's onset and the end of the preictal window. Use this to avoid labeling time immediately adjacent to seizure onset as "preictal," since EEG artifacts there can already resemble ictal activity.
-- `max_duration` - the maximum length (in seconds) of the preictal window itself.
+Adds preictal window rows to `master_df`:
+- **`sop`** (Seizure Occurrence Period): buffer/clearance gap (in seconds) immediately before seizure onset (formerly `start_cutoff`).
+- **`sph`** (Seizure Prediction Horizon): preictal window length (in seconds) to extract before the SOP buffer (formerly `max_duration`).
+- **`postictal_time`** (Optional): recovery buffer clearance required from a preceding seizure.
 
 Both values are clamped to never go negative, and a `status` column on every preictal row records what (if anything) got trimmed:
 
