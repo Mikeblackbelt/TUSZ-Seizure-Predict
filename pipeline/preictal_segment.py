@@ -542,7 +542,7 @@ def resolve_overlaps(df: pd.DataFrame) -> pd.DataFrame:
     dropped = df[~df['is_valid'] & ~is_sopbuffer]
     active = df[df['is_valid'] | is_sopbuffer].copy()
 
-    active['priority'] = active['label'].apply(get_priority)
+    active['priority'] = active['label'].apply(_get_label_priority)
 
     kept_rows = []
     for (edf_path, channel), group in active.groupby(['edf_path', 'channel']):
