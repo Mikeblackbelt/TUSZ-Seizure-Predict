@@ -132,8 +132,7 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
                 filtered["edf_path"] = edf_path
                 filtered["csv_path"] = csv_path
                 filtered["split"] = get_split(edf_path)
-                # -1 = not applicable; status only means something for preictal rows
-                filtered["status"] = -1
+                filtered["is_valid"] = True
                 records.append(filtered)
                 logger.debug(f"Added {len(filtered)} rows from {csv_path}")
 
@@ -154,7 +153,7 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
 
     master = pd.concat(records, ignore_index=True)
 
-    cols = ["edf_path", "csv_path", "split", "channel", "start_time", "stop_time", "label", "confidence", "status"]
+    cols = ["edf_path", "csv_path", "split", "channel", "start_time", "stop_time", "label", "confidence", "is_valid"]
     cols = [c for c in cols if c in master.columns]
     master = master[cols]
 
@@ -162,92 +161,279 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
     logger.info(f"Master file written to {output_path} with {len(master)} rows")
     return master
 
+def add_interictal_tags(master_df, recording_durations, min_interictal_length=0):
+    """
+    Add interictal (background) rows for gaps between existing labeled
+    windows, per (edf_path, channel).
 
-def add_preictal_tags(df: pd.DataFrame, start_cutoff: float, max_duration: float) -> pd.DataFrame:
-    """
-    Adds preictal windows ('p{type}') prior to seizure onset.
-    
-    Status codes:
-      -1 : Original seizure row
-       1 : Valid preictal window
-       0 : Collapsed window (insufficient baseline or start_time < 0)
-    """
-    rows = []
-    
-    for idx, row in df.iterrows():
-        # Retain original seizure row
-        rows.append(row.to_dict())
-        
-        pre_row = row.copy().to_dict()
-        pre_row["label"] = f"p{row['label']}"
-        
-        # Calculate raw times
-        raw_stop = row["start_time"] - start_cutoff
-        raw_start = raw_stop - max_duration
-        
-        # Binary check: If raw_start < 0 or raw_stop <= 0, collapse window to 0 with status 0
-        if raw_start < 0 or raw_stop <= 0:
-            pre_row["start_time"] = 0.0
-            pre_row["stop_time"] = 0.0
-            pre_row["status"] = 0  # Collapsed / omitted
-        else:
-            pre_row["start_time"] = raw_start
-            pre_row["stop_time"] = raw_stop
-            pre_row["status"] = 1  # Valid window
-            
-        rows.append(pre_row)
-        
-    result_df = pd.DataFrame(rows)
-    
-    # Sort by split -> edf_path -> channel -> start_time
-    if not result_df.empty and all(col in result_df.columns for col in ["split", "edf_path", "channel", "start_time"]):
-        result_df = result_df.sort_values(
-            by=["split", "edf_path", "channel", "start_time"], 
-            ascending=[True, True, True, True]
-        ).reset_index(drop=True)
-        
-    return result_df
+    Parameters:
+        master_df (pd.DataFrame): master annotations, after preictal/
+            postictal/consecutive tagging.
+        recording_durations (dict): edf_path -> total recording duration (s).
+        min_interictal_length (float): minimum gap length to keep.
 
+    Returns:
+        pd.DataFrame with interictal rows added.
+    """
+    if master_df is None or master_df.empty:
+        raise ValueError("master_df cannot be None or empty")
 
-def add_exclusion_intervals(
-    master_df: pd.DataFrame, 
-    postictal_time: float, 
-    sph: float, 
-    sop: float
-) -> pd.DataFrame:
-    """
-    Adds exclusion intervals ('x{type}') immediately after seizures.
-    """
-    rows = []
-    
-    for idx, row in master_df.iterrows():
-        rows.append(row.to_dict())
-        
-        # Skip creating exclusion tags for already-tagged generated rows
-        if str(row["label"]).startswith(("p", "q", "c", "x")):
+    new_rows = []
+    for (edf_path, channel), group in master_df.groupby(["edf_path", "channel"]):
+        duration = recording_durations.get(edf_path)
+        if duration is None:
+            logger.warning(f"No duration for {edf_path} - skipping interictal for this group")
             continue
+
+        intervals = group.sort_values("start_time")[["start_time", "stop_time"]].values.tolist()
+
+        merged = [] 
+        for start, stop in intervals:
+            if merged and start <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], stop)
+            else:
+                merged.append([start, stop])
+
+        template = group.iloc[0].to_dict()
+        cursor = 0.0
+        for start, stop in merged:
+            gap = start - cursor
+            if gap > 0 and gap >= min_interictal_length:
+                new_rows.append({**template, "label": "interictal",
+                                "start_time": cursor, "stop_time": start, "is_valid": True})
+            cursor = max(cursor, stop)
+
+        trailing_gap = duration - cursor
+        if trailing_gap > 0 and trailing_gap >= min_interictal_length:
+            new_rows.append({**template, "label": "interictal",
+                            "start_time": cursor, "stop_time": duration, "is_valid": True})
             
-        excl_row = row.copy().to_dict()
-        excl_row["label"] = f"x{row['label']}"
-        
-        excl_start = row["stop_time"]
-        excl_stop = excl_start + postictal_time
-        
-        excl_row["start_time"] = excl_start
-        excl_row["stop_time"] = excl_stop
-        excl_row["status"] = 1  # Valid exclusion interval
-        
-        rows.append(excl_row)
-        
-    result_df = pd.DataFrame(rows)
-    
-    if not result_df.empty and all(col in result_df.columns for col in ["split", "edf_path", "channel", "start_time"]):
-        result_df = result_df.sort_values(
-            by=["split", "edf_path", "channel", "start_time"], 
-            ascending=[True, True, True, True]
-        ).reset_index(drop=True)
-        
-    return result_df
+    if not new_rows:
+        logger.warning("No interictal rows generated")
+        return master_df.copy()
+
+    result = pd.concat([master_df, pd.DataFrame(new_rows)], ignore_index=True)
+    return result.sort_values(["split", "edf_path", "channel", "start_time"]).reset_index(drop=True)
+
+def add_preictal_tags(master_df, sph, sop, postictal_time=None):
+    """
+    Add preictal window rows to a master annotations DataFrame.
+
+    Definitions (per user correction - previously swapped):
+      - SOP (Seizure Occurrence Period): the buffer/safety-clearance gap
+        kept immediately before seizure onset. No preictal data is drawn
+        from this gap.
+      - SPH (Seizure Prediction Horizon): the actual preictal window length
+        that gets extracted and analyzed, sitting before the SOP buffer.
+
+    A preictal window for seizure `j` is exactly `[t_j(start) - sop - sph,
+    t_j(start) - sop]` - always this exact length, SPH+SOP. There is no
+    partial/trimmed case: a seizure's preictal example is either the full
+    required length (is_valid=True) or entirely dropped (is_valid=False). This is a hard all-or-nothing rule - no window
+    is ever shortened to fit available space. A dropped window has [0, j_start]
+    on a Gate 1 failure or [i_end, j_start] on a Gate 2
+    failure, so downstream logic (e.g. add_interictal_tags) correctly
+    treats that stretch as unusable/occupied time rather than as clean,
+    samplable background.
+
+    Two independent hard gates determine whether a seizure's preictal
+    window is viable at all:
+
+      Gate 1 (Session Start): t_j(start) < SPH + SOP
+          Not enough time exists between the recording's start and this
+          seizure for a full preictal window to fit at all.
+
+      Gate 2 (Inter-Seizure Gap): only checked if there's a previous
+      seizure `i` in the same (edf_path, channel) group, and only if
+      `postictal_time` is provided (see below).
+          gap = t_j(start) - t_i(end)
+          gap < postictal_time + sph + sop
+          Not enough clearance exists after the previous seizure's
+          recovery period for this seizure's preictal window to be
+          extracted cleanly - it would overlap the previous seizure's
+          ictal or recovery time.
+
+    If EITHER gate trips, the seizure is not viable for preictal
+    extraction: is_valid=False, start_time=stop_time=0.0. Otherwise: full
+    window, is_valid=True.  Otherwise: full window, is_valid=True, plus a SOP buffer row (is_valid=False - not
+    extracted as training data, but a real interval, not a zeroed/dropped
+    one, so resolve_overlaps() still resolves it normally).
+
+    Parameters:
+        master_df (pd.DataFrame): Master annotations table with at least
+            `edf_path`, `channel`, `start_time`, `stop_time`, and `label`
+            columns.
+        sph (numeric): Seizure Prediction Horizon - the preictal window
+            length that gets extracted.
+        sop (numeric): Seizure Occurrence Period - the buffer kept before
+            seizure onset.
+        postictal_time (numeric or None): Recovery window length used by
+            Gate 2. If None (default), Gate 2 is skipped entirely - only
+            Gate 1 (session start) applies. Pass this whenever you also
+            plan to call add_exclusion_intervals() with the same value, so
+            preictal viability and exclusion bounds stay consistent.
+
+    Returns:
+        pd.DataFrame: The original rows plus generated preictal rows
+        (viable and dropped), sorted by split, edf_path, channel,
+        start_time.
+
+    Raises:
+        ValueError: If master_df is None or empty.
+    """
+    if master_df is None:
+        logger.error("master_df is None - cannot add preictal tags. Check that make_master_file() found valid records.")
+        raise ValueError("master_df cannot be None. No valid records found in dataset.")
+
+    if master_df.empty:
+        logger.error("master_df is empty - cannot add preictal tags")
+        raise ValueError("master_df is empty. No valid records found in dataset.")
+
+    logger.info(
+        f"Adding preictal tags (sph={sph}, sop={sop}, postictal_time={postictal_time}) "
+        f"to {len(master_df)} rows"
+    )
+    preictal_rows = []
+    valid_counts = {False: 0, True: 0}
+    group_cols = ["edf_path", "channel"]
+
+    for (edf_path, channel), group in master_df.groupby(group_cols):
+        ictal = group.sort_values("start_time").reset_index(drop=True)
+
+        for i in range(len(ictal)):
+            row = ictal.iloc[i]
+            j_start = row["start_time"]
+
+            # Gate 1: session start
+            gate1_fail = j_start < (sph + sop)
+
+            # Gate 2: inter-seizure gap (only if postictal_time given and
+            # there's a previous seizure to measure against)
+            gate2_fail = False
+            if postictal_time is not None and i > 0:
+                i_end = float(ictal.iloc[i - 1]["stop_time"])
+                gap = j_start - i_end
+                gate2_fail = gap < (postictal_time + sph + sop)
+
+            if gate1_fail or gate2_fail:
+                preictal_start = 0.0 if gate1_fail else i_end
+                preictal_end = j_start
+                is_valid = False
+                reason = "gate1 (session start)" if gate1_fail else "gate2 (inter-seizure gap)"
+                logger.debug(
+                    f"Preictal window dropped (is_valid=False, {reason}) for {edf_path} "
+                    f"channel={channel} at ictal_start={j_start}"
+                )
+            else:
+                preictal_start = j_start - sop - sph
+                preictal_end = j_start - sop
+                is_valid = True
+
+            valid_counts[is_valid] += 1
+
+            preictal_rows.append({
+                **row.to_dict(),
+                "label": f"p{row['label']}",
+                "start_time": preictal_start,
+                "stop_time": preictal_end,
+                "is_valid": is_valid,
+            })
+            # Always block the SOP buffer
+            if is_valid == 1:
+                preictal_rows.append({
+                    **row.to_dict(),
+                    "label": f"p{row['label']}_sopbuffer",
+                    "start_time": j_start - sop,
+                    "stop_time": j_start,
+                    "is_valid": False,
+                })
+
+    if valid_counts[0]:
+        logger.warning(
+            f"{valid_counts[0]} preictal windows dropped entirely (is_valid=False, "
+            f"gate failure), {valid_counts[1]} valid full-length windows kept"
+        )
+
+    preictal_df = pd.DataFrame(preictal_rows)
+    result = pd.concat([master_df, preictal_df], ignore_index=True).sort_values(
+        ["split", "edf_path", "channel", "start_time"]
+    ).reset_index(drop=True)
+
+    return result
+
+
+def add_exclusion_intervals(master_df, postictal_time):
+    """
+    Add exclusion-interval rows covering post-seizure recovery time.
+
+    Now unconditionally flat: every seizure gets a `postictal_time`-length
+    exclusion window immediately after it ends, regardless of how close the
+    next seizure is. This is deliberately simpler than the earlier
+    merge-with-next-seizure version - viability of the NEXT seizure's
+    preictal window (i.e., whether seizures are too close together) is now
+    Gate 2's job in add_preictal_tags(), not this function's. This function
+    only marks clean exclusion bounds so an interictal-window builder
+    doesn't sample post-seizure recovery time as baseline activity.
+
+    If a flat postictal window happens to run past the next seizure's
+    start (seizures close together), that's expected - resolve_overlaps()
+    resolves the conflict by priority (seiz/pseiz rows outrank x* rows), so
+    the exclusion row never incorrectly displaces real ictal or preictal
+    data; it only fills in genuinely unlabeled time.
+
+    Must be called AFTER add_preictal_tags() if you want the same
+    postictal_time used consistently for both Gate 2 and this function's
+    exclusion bounds - pass the same value to both.
+
+    Exclusion rows are labeled with an `x` prefix (e.g. `xfnsz`) and given
+    is_valid=False (valid exclusion interval).
+
+    Parameters:
+        master_df (pd.DataFrame): Master annotations table. Only original
+            ictal rows (not already prefixed `p` or `x`) generate exclusion
+            rows.
+        postictal_time (numeric): Flat recovery window length after every
+            seizure.
+
+    Returns:
+        pd.DataFrame: The original rows plus generated exclusion rows,
+        sorted by split, edf_path, channel, start_time.
+
+    Raises:
+        ValueError: If master_df is None or empty.
+    """
+    if master_df is None or master_df.empty:
+        logger.error("master_df is None or empty - cannot add exclusion intervals")
+        raise ValueError("master_df cannot be None or empty")
+
+    logger.info(f"Adding exclusion intervals (postictal_time={postictal_time})")
+
+    new_rows = []
+    group_cols = ["edf_path", "channel"]
+
+    for (edf_path, channel), group in master_df.groupby(group_cols):
+        # Only original ictal rows generate exclusion rows - not preictal
+        # ('p'-prefixed) and not exclusion rows from a prior call.
+        ictal = group[~group["label"].astype(str).str.startswith(("p", "x"), na=False)]
+
+        for _, row in ictal.iterrows():
+            i_end = float(row["stop_time"])
+            new_rows.append({
+                **row.to_dict(),
+                "label": f"x{row['label']}",
+                "start_time": i_end,
+                "stop_time": i_end + postictal_time,
+                "is_valid": False,
+            })
+
+    if new_rows:
+        full_df = pd.concat([master_df, pd.DataFrame(new_rows)], ignore_index=True)
+    else:
+        full_df = master_df.copy()
+
+    full_df = resolve_overlaps(full_df)
+
+    return full_df.sort_values(["split", "edf_path", "channel", "start_time"]).reset_index(drop=True)
 
 
 def add_postictal_and_consecutive(
@@ -326,7 +512,14 @@ def add_postictal_and_consecutive(
 def resolve_overlaps(df: pd.DataFrame) -> pd.DataFrame:
     """
     Keep only the highest priority annotation when overlaps occur on the same (edf_path, channel).
-    Priority: exclusion (x*) > consecutive (c*) > preictal (p*) > original ictal > postictal (q*)
+    Priority: exclusion (x*) > preictal (p*) > original ictal
+
+    Rows skip resolution only if they're zeroed gate-failure rows
+    (is_valid=False, no `_sopbuffer` suffix) - these collapse to identical
+    (edf_path, channel, 0, 0) rows across different seizures, which would
+    falsely dedupe. SOP buffer rows are also is_valid=False but have real,
+    distinct time ranges, so they're treated as active and still get
+    carved/displaced by higher-priority rows like any other interval.
     """
     if df.empty:
         return df
@@ -338,32 +531,55 @@ def resolve_overlaps(df: pd.DataFrame) -> pd.DataFrame:
         if lbl.startswith('c'):
             return 5
         if lbl.startswith('p'):
-            return 4
-        if lbl.startswith('q'):
-            return 1
-        # Derived background windows (see add_background_tags) are the
-        # lowest priority -- they fill gaps with no reliable label, so any
-        # real annotation (including the original "bckg" tag) should win
-        # if boundaries ever coincide exactly.
-        if lbl.startswith('bg'):
+            return 2
+        if lbl == 'interictal': 
             return 0
-        return 2
-    
+        return 1
+
     df = df.copy()
-    df['priority'] = df['label'].apply(_get_label_priority)
-    
-    df = df.sort_values(
-        by=['edf_path', 'channel', 'start_time', 'priority'],
-        ascending=[True, True, True, False]
-    )
-    
-    df = df.drop_duplicates(
-        subset=['edf_path', 'channel', 'start_time', 'stop_time'], 
-        keep='first'
-    )
-    
-    df = df.drop(columns=['priority'])
-    
+
+    is_sopbuffer = df['label'].astype(str).str.endswith('_sopbuffer', na=False)
+    dropped = df[~df['is_valid'] & ~is_sopbuffer]
+    active = df[df['is_valid'] | is_sopbuffer].copy()
+
+    active['priority'] = active['label'].apply(get_priority)
+
+    kept_rows = []
+    for (edf_path, channel), group in active.groupby(['edf_path', 'channel']):
+        group = group.sort_values(
+            ['priority', 'start_time'], ascending=[False, True]
+        )
+        placed = []  # accepted (start, stop) intervals for this group so far
+
+        for _, row in group.iterrows():
+            segments = [(row['start_time'], row['stop_time'])]
+            for (a_start, a_stop) in placed:
+                next_segments = []
+                for (s, e) in segments:
+                    if a_stop <= s or a_start >= e:
+                        next_segments.append((s, e))
+                        continue
+                    if a_start > s:
+                        next_segments.append((s, a_start))
+                    if a_stop < e:
+                        next_segments.append((a_stop, e))
+                segments = next_segments
+
+            for (s, e) in segments:
+                if e - s <= 0:
+                    continue
+                new_row = row.to_dict()
+                new_row['start_time'] = s
+                new_row['stop_time'] = e
+                kept_rows.append(new_row)
+                placed.append((s, e))
+
+    active = pd.DataFrame(kept_rows)
+    if not active.empty:
+        active = active.drop(columns=['priority'])
+
+    df = pd.concat([active, dropped], ignore_index=True)
+
     logger.info(f"Overlap resolution complete. Final row count: {len(df)}")
     return df
 

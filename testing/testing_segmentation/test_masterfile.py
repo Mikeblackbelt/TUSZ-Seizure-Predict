@@ -1,10 +1,7 @@
 import pytest
 import pandas as pd
 from pipeline.preictal_segment import (
-    get_unique_tags,
     make_master_file,
-    add_preictal_tags,
-    get_split,
 )
 from util import handle_logs
 from testing.helpers import *
@@ -21,7 +18,7 @@ def sample_master():
         "stop_time":  [110.0, 420.0],
         "label":      ["fnsz", "gnsz"],
         "confidence": [1, 1],
-        "status":     [-1, -1],
+        "is_valid":     [True, True],
     })
 
 def test_make_master_file_basic(dataset_dir):
@@ -58,7 +55,7 @@ def test_make_master_file_columns(dataset_dir):
     write_edf(dataset_dir / "rec.edf")
     out = dataset_dir / "master.csv"
     df = make_master_file(dataset_dir, output_path=str(out))
-    for col in ["edf_path", "csv_path", "split", "channel", "start_time", "stop_time", "label", "status"]:
+    for col in ["edf_path", "csv_path", "split", "channel", "start_time", "stop_time", "label", "is_valid"]:
         assert col in df.columns, f"Missing column: {col}"
     logger.info("test_make_master_file_columns: passed")
 
@@ -68,14 +65,14 @@ def test_make_master_file_empty_dir(dataset_dir):
     assert df is None
     logger.info("test_make_master_file_empty_dir: passed")
 
-def test_make_master_file_status_not_applicable(dataset_dir):
-    logger.info("test_make_master_file_status_not_applicable: start")
+def test_make_master_file_ictal_is_valid(dataset_dir):
+    logger.info("test_make_master_file_ictal_is_valid: start")
     write_csv(dataset_dir / "rec.csv", ["fnsz"])
     write_edf(dataset_dir / "rec.edf")
     out = dataset_dir / "master.csv"
     df = make_master_file(dataset_dir, output_path=str(out))
-    assert (df["status"] == -1).all()
-    logger.info("test_make_master_file_status_not_applicable: passed")
+    assert (df["is_valid"] == True).all()
+    logger.info("test_make_master_file_ictal_is_valid: passed")
 
 def test_make_master_file_split_assigned(dataset_dir):
     logger.info("test_make_master_file_split_assigned: start")
