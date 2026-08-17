@@ -308,7 +308,9 @@ def build_master_file(
         raise RuntimeError("Master file generation failed.")
 
     logger.info("Adding preictal tags...")
-    master_df = preictal_segment.add_preictal_tags(master_df, start_cutoff=sph, max_duration=sop)
+    master_df = preictal_segment.add_preictal_tags(
+        master_df, sph=sop, sop=sph, postictal_time=postictal_time
+    )
 
     if not skip_exclusions:
         logger.info("Adding postictal and consecutive intervals...")

@@ -1,4 +1,4 @@
-from pipeline import pipeline_gpt2class
+import pipeline_gpt2class
 
 
 def test_get_sessions_to_process_starts_from_requested_session(monkeypatch):
