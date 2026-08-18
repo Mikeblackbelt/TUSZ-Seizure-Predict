@@ -133,6 +133,7 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
                 filtered["csv_path"] = csv_path
                 filtered["split"] = get_split(edf_path)
                 filtered["is_valid"] = True
+                filtered["status"] = -1
                 records.append(filtered)
                 logger.debug(f"Added {len(filtered)} rows from {csv_path}")
 
@@ -153,7 +154,7 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
 
     master = pd.concat(records, ignore_index=True)
 
-    cols = ["edf_path", "csv_path", "split", "channel", "start_time", "stop_time", "label", "confidence", "is_valid"]
+    cols = ["edf_path", "csv_path", "split", "channel", "start_time", "stop_time", "label", "confidence", "is_valid", "status"]
     cols = [c for c in cols if c in master.columns]
     master = master[cols]
 
@@ -337,6 +338,7 @@ def add_preictal_tags(master_df, sph, sop, postictal_time=None):
                 "start_time": preictal_start,
                 "stop_time": preictal_end,
                 "is_valid": is_valid,
+                "status": 1,
             })
             # Always block the SOP buffer
             if is_valid == 1:
@@ -346,6 +348,7 @@ def add_preictal_tags(master_df, sph, sop, postictal_time=None):
                     "start_time": j_start - sop,
                     "stop_time": j_start,
                     "is_valid": False,
+                    "status": 1,
                 })
 
     if valid_counts[0]:
@@ -424,6 +427,7 @@ def add_exclusion_intervals(master_df, postictal_time):
                 "start_time": i_end,
                 "stop_time": i_end + postictal_time,
                 "is_valid": False,
+                "status": 1,
             })
 
     if new_rows:

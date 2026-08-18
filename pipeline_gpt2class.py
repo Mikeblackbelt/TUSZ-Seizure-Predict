@@ -172,6 +172,12 @@ def build_arg_parser(config):
              "an artifact-flagged label, not clean background).",
     )
     parser.add_argument(
+        "--num-workers",
+        type=int,
+        default=config.get("num_workers", 4),
+        help="Number of parallel worker threads for session processing (default: 4).",
+    )
+    parser.add_argument(
         "--process-sessions",
         action="store_true",
         help="Concatenate, filter, resample, and checkpoint all indexed EEG sessions.",
@@ -342,6 +348,39 @@ def build_master_file(
     return master_df
 
 
+def _process_single_session(args_tuple):
+    (
+        session_key,
+        session,
+        checkpoint_dir,
+        create_montage_flag,
+        bandpass_low,
+        bandpass_high,
+        notch_variance_threshold,
+        notch_power_percentile,
+    ) = args_tuple
+
+    result = concatenate_session_eeg(
+        session,
+        session_key=session_key,
+        output_dir=checkpoint_dir,
+        apply_filtering=True,
+        notch_variance_threshold=notch_variance_threshold,
+        notch_power_percentile=notch_power_percentile,
+        bandpass_low=bandpass_low,
+        bandpass_high=bandpass_high,
+    )
+    if result is None:
+        return session_key, "no_edf"
+
+    if create_montage_flag:
+        montage = create_bipolar_montages(session_key, checkpoint_dir)
+        if montage is None:
+            return session_key, "montage_failed"
+
+    return session_key, "success"
+
+
 def process_sessions(
     input_path,
     checkpoint_dir,
@@ -351,7 +390,11 @@ def process_sessions(
     notch_variance_threshold,
     notch_power_percentile,
     logger,
+    num_workers=4,
 ):
+    import concurrent.futures
+    from tqdm import tqdm
+
     logger.info("Indexing EEG sessions...")
     sessions = index_sessions(input_path)
     logger.info(f"Found {len(sessions)} indexed sessions")
@@ -360,34 +403,46 @@ def process_sessions(
         logger.warning("No sessions were found. Skipping EEG processing.")
         return
 
+    tasks = []
+    skipped_count = 0
     for session_key, session in sessions.items():
-        logger.info(f"Processing session: {session_key}")
-
         raw_checkpoint_exists = _checkpoint_exists(checkpoint_dir, session_key, "raw")
         proc_checkpoint_exists = _checkpoint_exists(checkpoint_dir, session_key, "proc")
 
         if raw_checkpoint_exists and (not create_montage_flag or proc_checkpoint_exists):
-            logger.info(f"Skipping {session_key}: existing checkpoints already present")
+            skipped_count += 1
             continue
 
-        result = concatenate_session_eeg(
+        tasks.append((
+            session_key,
             session,
-            session_key=session_key,
-            output_dir=checkpoint_dir,
-            apply_filtering=True,
-            notch_variance_threshold=notch_variance_threshold,
-            notch_power_percentile=notch_power_percentile,
-            bandpass_low=bandpass_low,
-            bandpass_high=bandpass_high,
-        )
-        if result is None:
-            logger.warning(f"Session {session_key} had no EDF files. Skipping.")
-            continue
+            checkpoint_dir,
+            create_montage_flag,
+            bandpass_low,
+            bandpass_high,
+            notch_variance_threshold,
+            notch_power_percentile,
+        ))
 
-        if create_montage_flag:
-            montage = create_bipolar_montages(session_key, checkpoint_dir)
-            if montage is None:
-                logger.warning(f"Bipolar montage creation failed for {session_key}")
+    if skipped_count > 0:
+        logger.info(f"Skipped {skipped_count} sessions with existing checkpoints.")
+
+    if not tasks:
+        logger.info("All indexed sessions already have existing checkpoints.")
+        return
+
+    workers = max(1, num_workers or 4)
+    logger.info(f"Processing {len(tasks)} sessions using {workers} parallel worker(s)...")
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(_process_single_session, task): task[0] for task in tasks}
+        for future in tqdm(concurrent.futures.as_completed(futures), total=len(futures), desc="Processing sessions"):
+            sess_key = futures[future]
+            try:
+                sk, status = future.result()
+                logger.debug(f"Session {sk} processed: {status}")
+            except Exception as exc:
+                logger.error(f"Session {sess_key} processing failed with exception: {exc}")
 
 
 def main():
@@ -481,6 +536,7 @@ def main():
             notch_variance_threshold=args.notch_variance_threshold,
             notch_power_percentile=args.notch_power_percentile,
             logger=logger,
+            num_workers=args.num_workers,
         )
 
     logger.info("-" * 60)
