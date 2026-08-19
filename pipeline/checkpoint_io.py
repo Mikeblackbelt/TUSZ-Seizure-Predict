@@ -31,8 +31,10 @@ def save_checkpoint(array: np.ndarray, session_key: str, output_dir: str, stage:
 
     os.makedirs(output_dir, exist_ok=True)
     out_path = _checkpoint_path(output_dir, session_key, stage)
+    tmp_path = out_path + ".tmp"
     compact_array = _prepare_array_for_storage(array)
-    np.savez_compressed(out_path, data=compact_array)
+    np.savez_compressed(tmp_path, data=compact_array)
+    os.replace(tmp_path, out_path)
     logger.info(
         f"Saved {stage} checkpoint for {session_key} to {out_path} "
         f"(shape={compact_array.shape}, dtype={compact_array.dtype})"

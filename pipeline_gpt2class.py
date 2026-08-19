@@ -96,6 +96,11 @@ def build_arg_parser(config):
         help="Directory to save raw and proc checkpoint files.",
     )
     parser.add_argument(
+        "--clean-checkpoint-dir",
+        action="store_true",
+        help="Clear existing files in the target checkpoint directory before running preprocessing.",
+    )
+    parser.add_argument(
         "--log-path",
         type=str,
         default=config.get("applog", "logs\\app.log"),
@@ -535,6 +540,19 @@ def main():
         return
 
     if args.process_sessions:
+        if args.clean_checkpoint_dir and os.path.exists(args.checkpoint_dir):
+            import shutil
+            logger.info(f"Clearing target checkpoint directory: {args.checkpoint_dir}")
+            for item in os.listdir(args.checkpoint_dir):
+                item_path = os.path.join(args.checkpoint_dir, item)
+                try:
+                    if os.path.isfile(item_path) or os.path.islink(item_path):
+                        os.unlink(item_path)
+                    elif os.path.isdir(item_path):
+                        shutil.rmtree(item_path)
+                except Exception as exc:
+                    logger.warning(f"Could not remove {item_path}: {exc}")
+
         process_sessions(
             input_path=args.input_path,
             checkpoint_dir=args.checkpoint_dir,

@@ -129,6 +129,7 @@ def main():
     parser.add_argument("--compression", default="zstd", choices=["snappy", "gzip", "zstd", "brotli", "none"], help="Parquet compression codec (default: zstd -- good ratio/speed tradeoff for float EEG data)")
     parser.add_argument("--row-group-size", type=int, default=None, help="Rows per parquet row group. Leave unset to let pyarrow choose; set explicitly if you plan to do row-group-level partial reads later.")
     parser.add_argument("--channel-names", default=None, help="Comma-separated channel names to use as column headers, in array-row order (default: ch_0, ch_1, ...)")
+    parser.add_argument("--clean-output-dir", action="store_true", help="Clear existing files in output directory before converting.")
     parser.add_argument("--delete-original", action="store_true", help="Delete the source .npz/.npy ONLY after its parquet output is verified to round-trip correctly. Off by default.")
     parser.add_argument("--dry-run", action="store_true", help="List what would be converted without writing anything")
     parser.add_argument("--limit", type=int, default=None, help="Only process the first N files (useful for a quick spot-check before running on everything)")
@@ -139,6 +140,20 @@ def main():
         sys.exit(1)
 
     out_dir = args.output_dir or args.checkpoint_dir
+
+    if args.clean_output_dir and os.path.exists(out_dir):
+        import shutil
+        print(f"Clearing output directory: {out_dir}")
+        for item in os.listdir(out_dir):
+            item_path = os.path.join(out_dir, item)
+            try:
+                if os.path.isfile(item_path) or os.path.islink(item_path):
+                    os.unlink(item_path)
+                elif os.path.isdir(item_path):
+                    shutil.rmtree(item_path)
+            except Exception as e:
+                print(f"Warning: Could not remove {item_path}: {e}", file=sys.stderr)
+
     os.makedirs(out_dir, exist_ok=True)
 
     channel_names = args.channel_names.split(",") if args.channel_names else None
