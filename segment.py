@@ -150,23 +150,30 @@ def main():
             postictal_time=post_time,
         )
 
-    LOGGER.info("Computing recording durations...")
-    recording_durations = {}
-    for edf_path in master_df["edf_path"].unique():
-        info = get_recording_info(edf_path)
-        recording_durations[edf_path] = info["n_times"] / info["sfreq"]
-
-    LOGGER.info("Adding interictal tags...")
-    master_df = preictal_segment.add_interictal_tags(
-        master_df, recording_durations
+    LOGGER.info("Adding background tags (fixed 'bg' windows)...")
+    master_df = preictal_segment.add_background_tags(
+        master_df,
+        window_duration=4.0,
     )
+
+    LOGGER.info("Resolving label overlaps...")
+    master_df = preictal_segment.resolve_overlaps(master_df)
+
+    LOGGER.info("Chopping event spans into fixed model-window-sized segments...")
+    master_df = preictal_segment.chop_master_windows(
+        master_df,
+        window_duration=4.0,
+    )
+
     # Save result
     master_df.to_csv(new_master_path, index=False)
     
     LOGGER.info("-" * 60)
     LOGGER.info(f"Pipeline complete - output at {new_master_path}")
     LOGGER.info(f"Output saved to: {new_master_path} ({len(master_df)} rows)")
+    LOGGER.info("NOTE: segment.py is legacy. For full feature options and session processing, use pipeline_gpt2class.py.")
     LOGGER.info("-" * 60)
+
 
 
 if __name__ == "__main__":

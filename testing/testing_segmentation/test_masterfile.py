@@ -84,3 +84,29 @@ def test_make_master_file_split_assigned(dataset_dir):
     df = make_master_file(dataset_dir, output_path=str(out))
     assert (df["split"] == "train").all()
     logger.info("test_make_master_file_split_assigned: passed")
+
+
+def test_chop_master_windows_fixed_length():
+    from pipeline.preictal_segment import chop_master_windows
+
+    master = pd.DataFrame([
+        {"split": "train", "edf_path": "a.edf", "channel": "0", "start_time": 0.0, "stop_time": 10.0, "label": "pfnsz", "is_valid": True},
+        {"split": "train", "edf_path": "a.edf", "channel": "0", "start_time": 20.0, "stop_time": 28.0, "label": "fnsz", "is_valid": True},
+        {"split": "train", "edf_path": "a.edf", "channel": "0", "start_time": 30.0, "stop_time": 34.0, "label": "bg", "is_valid": True},
+        {"split": "train", "edf_path": "a.edf", "channel": "0", "start_time": 100.0, "stop_time": 120.0, "label": "pfnsz_sopbuffer", "is_valid": False},
+    ])
+
+    chopped = chop_master_windows(master, window_duration=4.0)
+
+    # valid rows should all be exactly 4.0s
+    valid_chopped = chopped[chopped["is_valid"] & ~chopped["label"].str.endswith("_sopbuffer")]
+    assert (valid_chopped["stop_time"] - valid_chopped["start_time"] == 4.0).all()
+
+    # preictal 0..10 -> 2 windows (0..4, 4..8), 8..10 dropped
+    # fnsz 20..28 -> 2 windows (20..24, 24..28)
+    # bg 30..34 -> 1 window (30..34)
+    # sopbuffer -> preserved
+    assert len(chopped[chopped["label"] == "pfnsz"]) == 2
+    assert len(chopped[chopped["label"] == "fnsz"]) == 2
+    assert len(chopped[chopped["label"] == "bg"]) == 1
+    assert len(chopped[chopped["label"] == "pfnsz_sopbuffer"]) == 1

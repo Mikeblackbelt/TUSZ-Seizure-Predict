@@ -96,3 +96,30 @@ def test_segment_adaptive_balances_against_interictal_count():
 
     assert len(preictal_segs) > len(preictal_segs_no_overlap)
     assert len(preictal_segs) <= len(interictal_segs) * 2
+
+
+def test_segment_df_fixed():
+    import pandas as pd
+    from pipeline.windows import segment_df_fixed
+
+    df = pd.DataFrame([
+        {"split": "train", "edf_path": "a.edf", "channel": "0", "start_time": 0.0, "stop_time": 10.0, "label": "fnsz", "is_valid": True},
+        {"split": "train", "edf_path": "a.edf", "channel": "0", "start_time": 10.0, "stop_time": 12.0, "label": "fnsz", "is_valid": True},  # too short for 4.0s
+    ])
+    res = segment_df_fixed(df, seg_time=4.0)
+    assert len(res) == 2  # 0..4 and 4..8 (8..10 dropped)
+    assert (res["stop_time"] - res["start_time"] == 4.0).all()
+    assert (res["start_time"].tolist()) == [0.0, 4.0]
+
+
+def test_segment_df_adaptive():
+    import pandas as pd
+    from pipeline.windows import segment_df_adaptive
+
+    df = pd.DataFrame([
+        {"split": "train", "edf_path": "a.edf", "channel": "0", "start_time": 0.0, "stop_time": 100.0, "label": "bg", "is_valid": True},
+        {"split": "train", "edf_path": "a.edf", "channel": "0", "start_time": 100.0, "stop_time": 120.0, "label": "pfnsz", "is_valid": True},
+    ])
+    res = segment_df_adaptive(df, seg_time=4.0, total_len_bg=100.0)
+    pre = res[res["label"] == "pfnsz"]
+    assert len(pre) > 5  # adaptive overlap creates more than 20/4 = 5 segments

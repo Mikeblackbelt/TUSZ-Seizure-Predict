@@ -167,6 +167,10 @@ def add_interictal_tags(master_df, recording_durations, min_interictal_length=0)
     Add interictal (background) rows for gaps between existing labeled
     windows, per (edf_path, channel).
 
+    .. deprecated::
+        add_interictal_tags() is deprecated. Standardize entirely on
+        add_background_tags() for fixed-length 'bg' negative-class generation.
+
     Parameters:
         master_df (pd.DataFrame): master annotations, after preictal/
             postictal/consecutive tagging.
@@ -176,6 +180,14 @@ def add_interictal_tags(master_df, recording_durations, min_interictal_length=0)
     Returns:
         pd.DataFrame with interictal rows added.
     """
+    import warnings
+    warnings.warn(
+        "add_interictal_tags() is deprecated and will be retired in a future release. "
+        "Use add_background_tags() instead, which standardizes negative-class "
+        "generation on fixed-length 'bg' windows.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if master_df is None or master_df.empty:
         raise ValueError("master_df cannot be None or empty")
 
@@ -215,6 +227,7 @@ def add_interictal_tags(master_df, recording_durations, min_interictal_length=0)
 
     result = pd.concat([master_df, pd.DataFrame(new_rows)], ignore_index=True)
     return result.sort_values(["split", "edf_path", "channel", "start_time"]).reset_index(drop=True)
+
 
 def add_preictal_tags(master_df, sph, sop, postictal_time=None):
     """
@@ -749,3 +762,85 @@ def add_background_tags(
         ).reset_index(drop=True)
 
     return result_df
+
+
+def chop_master_windows(
+    master_df: pd.DataFrame,
+    window_duration: float = 4.0,
+    preictal_stride: float = None,
+    preictal_adaptive: bool = False,
+) -> pd.DataFrame:
+    """
+    Chop all event rows (preictal p*, original ictal, consecutive c*, postictal q*/x*)
+    in master_df into fixed-length `window_duration`-second segments.
+
+    Invalid rows (is_valid=False, e.g. SOP buffers _sopbuffer or gate failures)
+    are preserved as-is so unusable intervals remain tracked.
+
+    Parameters:
+        master_df (pd.DataFrame): Annotations DataFrame after resolve_overlaps().
+        window_duration (float): Length in seconds of each model window (default 4.0).
+        preictal_stride (float or None): Step size in seconds between consecutive
+            preictal windows. If None, defaults to `window_duration` (non-overlapping).
+        preictal_adaptive (bool): If True, compute adaptive overlap step for
+            preictal rows relative to background window duration.
+
+    Returns:
+        pd.DataFrame: New master DataFrame where every valid row is a fixed
+        `window_duration`-length segment.
+    """
+    if master_df is None or master_df.empty:
+        return master_df
+
+    from pipeline.windows import segment_df_fixed, segment_df_adaptive
+
+    df = master_df.copy()
+
+    # Separate invalid rows (gate failures, _sopbuffer) from valid active rows
+    is_sopbuffer = df["label"].astype(str).str.endswith("_sopbuffer", na=False)
+    invalid_mask = ~df["is_valid"] | is_sopbuffer
+    invalid_df = df[invalid_mask].copy()
+    valid_df = df[~invalid_mask].copy()
+
+    if valid_df.empty:
+        return master_df.copy()
+
+    # Background rows ('bg') were generated with window_duration. Any bg row
+    # shorter than window_duration (e.g. truncated by overlap resolution) is dropped.
+    bg_mask = valid_df["label"] == "bg"
+    bg_df = valid_df[bg_mask].copy()
+    if not bg_df.empty:
+        bg_df = bg_df[(bg_df["stop_time"] - bg_df["start_time"]) >= window_duration - 1e-9]
+
+    # Non-bg valid rows (preictal, original ictal, c*, q*, x*)
+    non_bg_df = valid_df[~bg_mask].copy()
+
+    if non_bg_df.empty:
+        result = pd.concat([bg_df, invalid_df], ignore_index=True)
+    else:
+        # Preictal vs non-preictal
+        is_pre = non_bg_df["label"].astype(str).str.startswith("p")
+        pre_df = non_bg_df[is_pre]
+        other_event_df = non_bg_df[~is_pre]
+
+        # Segment other events (ictal, c*, q*, x*) with fixed non-overlapping windows
+        segmented_other = segment_df_fixed(other_event_df, seg_time=window_duration, step_time=window_duration)
+
+        # Segment preictal
+        if preictal_adaptive and not bg_df.empty:
+            total_len_bg = (bg_df["stop_time"] - bg_df["start_time"]).sum()
+            segmented_pre = segment_df_adaptive(pre_df, seg_time=window_duration, total_len_bg=total_len_bg)
+        else:
+            p_step = preictal_stride if preictal_stride is not None else window_duration
+            segmented_pre = segment_df_fixed(pre_df, seg_time=window_duration, step_time=p_step)
+
+        result = pd.concat([bg_df, segmented_pre, segmented_other, invalid_df], ignore_index=True)
+
+    if all(col in result.columns for col in ["split", "edf_path", "channel", "start_time"]):
+        result = result.sort_values(
+            by=["split", "edf_path", "channel", "start_time"],
+            ascending=[True, True, True, True],
+        ).reset_index(drop=True)
+
+    logger.info(f"chop_master_windows: converted {len(master_df)} input rows into {len(result)} fixed-window rows (window_duration={window_duration}s)")
+    return result

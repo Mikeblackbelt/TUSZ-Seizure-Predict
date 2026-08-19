@@ -339,6 +339,13 @@ def build_master_file(
     logger.info("Resolving label overlaps...")
     master_df = preictal_segment.resolve_overlaps(master_df)
 
+    logger.info("Chopping event spans into fixed model-window-sized segments...")
+    master_df = preictal_segment.chop_master_windows(
+        master_df,
+        window_duration=bg_window_duration,
+        preictal_stride=bg_stride,
+    )
+
     parent_dir = os.path.dirname(output_path)
     if parent_dir and not os.path.exists(parent_dir):
         os.makedirs(parent_dir, exist_ok=True)
@@ -346,6 +353,7 @@ def build_master_file(
     master_df.to_csv(output_path, index=False)
     logger.info(f"Master file saved to {output_path} ({len(master_df)} rows)")
     return master_df
+
 
 
 def _process_single_session(args_tuple):
