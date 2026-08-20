@@ -31,7 +31,7 @@ def save_checkpoint(array: np.ndarray, session_key: str, output_dir: str, stage:
 
     os.makedirs(output_dir, exist_ok=True)
     out_path = _checkpoint_path(output_dir, session_key, stage)
-    tmp_path = out_path + ".tmp"
+    tmp_path = out_path + ".tmp.npz"
     compact_array = _prepare_array_for_storage(array)
     np.savez_compressed(tmp_path, data=compact_array)
     os.replace(tmp_path, out_path)
