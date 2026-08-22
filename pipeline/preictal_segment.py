@@ -54,6 +54,178 @@ def _is_original_ictal_label(label) -> bool:
     return str(label) in KNOWN_SEIZURE_TYPES
 
 
+def build_session_layouts(dataset_path, duration_cache=None):
+    """
+    Compute each session's constituent-file layout: the cumulative,
+    native-duration-based offset (in seconds) of every .edf file within
+    its session's TRUE continuous recording, in the same file order
+    raw_eeg_extraction.py's concatenate_session_eeg() uses to build the
+    actual concatenated checkpoint array (session_index.index_sessions()
+    sorts edf_paths, and both this function and concatenate_session_eeg()
+    consume that same sorted order).
+
+    WHY THIS EXISTS: make_master_file() reads each individual .edf's
+    annotation CSV independently, with start_time/stop_time relative to
+    THAT FILE's own zero point -- but a TUSZ "session" is frequently split
+    across multiple back-to-back .edf files, concatenated into ONE
+    continuous array with NO gap between them (see raw_eeg_extraction.py).
+    Every downstream function in this module (Gate 1/Gate 2 in
+    add_preictal_tags, background-gap derivation in add_background_tags,
+    overlap resolution in resolve_overlaps) needs to reason about "session
+    start" and "time since the previous seizure" against that TRUE
+    continuous timeline, not each file's own local zero point -- otherwise
+    a seizure sitting near the start of the 4th file of a 6-file session
+    gets measured as if it had zero seconds of lead-in time, even though
+    ~3 files' worth of clean preceding data is right there in the same
+    physical recording.
+
+    Uses each file's NATIVE (pre-resample) duration from its .edf header
+    (via _get_edf_duration_seconds/get_recording_info) rather than the
+    already-resampled sample counts raw_eeg_extraction.py records in
+    "{session_key}_offsets.json" -- this lets master-file construction run
+    independently of whether checkpoints have been built yet (build order
+    doesn't matter). The two can differ by a handful of samples per file
+    (resample rounding), negligible at the seconds-level granularity gate/
+    overlap decisions operate on, and fully self-consistent since the same
+    layout is used both to shift rows INTO session-global time
+    (make_master_file) and back OUT to file-local time for the final CSV
+    (see finalize_file_local_times()) -- any small drift cancels out on
+    the round trip rather than accumulating.
+
+    Parameters:
+        dataset_path (str): Root dataset path, same as passed to
+            make_master_file() / index_sessions().
+        duration_cache (dict or None): Optional dict to memoize per-file
+            duration lookups across multiple calls.
+
+    Returns:
+        dict: session_key -> {
+            "files": [(edf_path, offset_seconds, duration_seconds), ...],
+                sorted by offset (== raw_eeg_extraction.py's concatenation
+                order),
+            "total_duration": float,  # sum of all constituent files'
+                native durations -- the TRUE session length in seconds.
+        }
+    """
+    from pipeline.session_index import index_sessions
+
+    cache = duration_cache if duration_cache is not None else {}
+    sessions = index_sessions(dataset_path)
+
+    layouts = {}
+    for session_key, session in sessions.items():
+        files = []
+        cursor = 0.0
+        for edf_path in session["edf_paths"]:  # already sorted -- matches
+                                                 # raw_eeg_extraction.py's
+                                                 # concatenation order
+            duration = _get_edf_duration_seconds(edf_path, cache)
+            if duration is None:
+                logger.warning(
+                    f"Could not read duration for {edf_path} (session "
+                    f"{session_key}) -- session-global offsets for any "
+                    f"LATER files in this session may be incorrect."
+                )
+                duration = 0.0
+            files.append((edf_path, cursor, duration))
+            cursor += duration
+        layouts[session_key] = {"files": files, "total_duration": cursor}
+
+    return layouts
+
+
+def finalize_file_local_times(master_df, layouts):
+    """
+    Converts every row's start_time/stop_time from session-global seconds
+    (the convention used throughout this module, from make_master_file()
+    onward, once session_layouts is supplied) back to FILE-LOCAL seconds
+    relative to whichever individual .edf file actually contains that
+    row's start -- the convention TUSZ-Conformer-Prediction's dataset.py
+    expects (it looks up each row's OWN edf_path's offset in
+    "{session}_offsets.json" and adds it back to reach the true position
+    in the concatenated checkpoint array).
+
+    This is the ONLY place session-global time gets converted back to
+    file-local -- every function between make_master_file() and this one
+    operates purely in session-global time, matching the TRUE continuous
+    recording. Call this LAST, after chop_master_windows(), right before
+    writing the final master CSV.
+
+    A row is reassigned to whichever file's [offset, offset+duration) span
+    contains its (session-global) start_time. The resulting file-local
+    stop_time CAN legitimately exceed that file's own duration (e.g. for a
+    row that genuinely spans two files, right at a boundary) -- this is
+    fine and expected: TUSZ-Conformer-Prediction's window-slicing clips to
+    the FULL concatenated array's bounds, not to a single file's own span,
+    so a slightly-overflowing stop_time just reads on into the next file's
+    (contiguous, gap-free) samples in the same array, exactly as intended.
+
+    Parameters:
+        master_df (pd.DataFrame): Fully processed master dataframe with
+            session-global start_time/stop_time and a session_key column.
+        layouts (dict): Output of build_session_layouts().
+
+    Returns:
+        pd.DataFrame: Copy of master_df with start_time/stop_time and
+        edf_path rewritten to file-local convention. Rows whose
+        session_key has no layout entry are left unchanged (logged).
+    """
+    import bisect
+
+    if master_df.empty or "session_key" not in master_df.columns:
+        return master_df.copy()
+
+    df = master_df.reset_index(drop=True).copy()
+    n = len(df)
+    new_edf_path = list(df["edf_path"]) if "edf_path" in df.columns else [None] * n
+    new_start = list(df["start_time"].astype(float))
+    new_stop = list(df["stop_time"].astype(float))
+    unmatched = 0
+
+    for session_key, idx in df.groupby("session_key").groups.items():
+        session = layouts.get(session_key)
+        if session is None or not session["files"]:
+            unmatched += len(idx)
+            continue
+        files = session["files"]  # sorted by offset
+        offsets = [f[1] for f in files]
+
+        for i in idx:
+            s_time = float(df.at[i, "start_time"])
+            # Rightmost file whose offset <= s_time
+            pos = bisect.bisect_right(offsets, s_time) - 1
+            pos = max(0, min(pos, len(files) - 1))
+            edf_path, offset, _duration = files[pos]
+            new_edf_path[i] = edf_path
+            new_start[i] = s_time - offset
+            new_stop[i] = float(df.at[i, "stop_time"]) - offset
+
+    if unmatched:
+        logger.warning(
+            f"finalize_file_local_times: {unmatched} rows had no session "
+            f"layout entry for their session_key -- their edf_path/"
+            f"start_time/stop_time were left unchanged (still "
+            f"session-global -- likely incorrect for training)."
+        )
+
+    df["edf_path"] = new_edf_path
+    df["start_time"] = new_start
+    df["stop_time"] = new_stop
+    return df
+
+
+def _group_cols_for(df: pd.DataFrame) -> list:
+    """Session-aware grouping helper used throughout this module: group by
+    (session_key, channel) whenever session_key is present (i.e. rows came
+    from make_master_file() with session_layouts supplied, so start_time/
+    stop_time are session-global) -- otherwise fall back to
+    (edf_path, channel) for standalone/legacy callers whose start_time/
+    stop_time are still file-local (e.g. hand-built test fixtures)."""
+    if "session_key" in df.columns:
+        return ["session_key", "channel"]
+    return ["edf_path", "channel"]
+
+
 def get_split(path):
     """
     Determine the dataset split for a path.
@@ -112,7 +284,7 @@ def get_unique_tags(dataset_path):
     return tags
 
 
-def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
+def make_master_file(dataset_path, output_path="master.csv", allow_tag=None, session_layouts=None):
     """
     Build a master CSV from annotation files in a TUSZ-style dataset.
     
@@ -120,6 +292,20 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
     	dataset_path: Root directory containing annotation CSV files and matching EDF files.
     	output_path: Destination path for the generated master CSV.
     	allow_tag: Collection of labels to keep. If omitted, all labels found in the dataset are included.
+        session_layouts: Optional output of build_session_layouts(dataset_path).
+            When given, every row's start_time/stop_time is shifted from
+            file-local to SESSION-GLOBAL seconds (see build_session_layouts()'s
+            docstring for why), and a `session_key` column is added -- every
+            downstream function in this module (add_preictal_tags,
+            add_postictal_and_consecutive, add_background_tags,
+            resolve_overlaps) then groups by session_key instead of edf_path,
+            correctly reasoning about the TRUE continuous multi-file
+            recording. If omitted (default), this function computes it
+            internally so standalone calls (tests, ad-hoc scripts) still get
+            the fix automatically; pass it explicitly from
+            pipeline_gpt2class.py's build_master_file() to avoid recomputing
+            it (and re-reading every .edf header) for every call in the same
+            pipeline run.
     
     Returns:
     	A DataFrame containing the combined master rows, or None if no valid records are found.
@@ -136,6 +322,15 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
         logger.info(f"Using all tags: {allow_tag}")
     else:
         logger.info(f"Filtering to tags: {allow_tag}")
+
+    if session_layouts is None:
+        logger.info("Computing session-global time layout (per-file .edf header durations)...")
+        session_layouts = build_session_layouts(dataset_path)
+    # Reverse lookup: edf_path -> (session_key, offset_seconds)
+    file_to_session = {}
+    for session_key, session in session_layouts.items():
+        for edf_path, offset_seconds, _duration in session["files"]:
+            file_to_session[os.path.normpath(edf_path)] = (session_key, offset_seconds)
 
     for root, dirs, files in os.walk(dataset_path):
         csv_files = [f for f in files if f.endswith(".csv")]
@@ -173,6 +368,29 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
                 filtered["split"] = get_split(edf_path)
                 filtered["is_valid"] = True
                 filtered["status"] = -1
+
+                # FIX: shift start_time/stop_time from this file's own local
+                # zero point to session-global seconds, and tag the row with
+                # its true session_key -- see build_session_layouts()'s
+                # docstring. Every downstream function (Gate 1/Gate 2,
+                # background-gap derivation, overlap resolution) then groups
+                # by session_key and reasons about the TRUE continuous
+                # recording instead of being blind to everything outside
+                # this one file.
+                match = file_to_session.get(os.path.normpath(edf_path))
+                if match is not None:
+                    session_key, offset_seconds = match
+                    filtered["session_key"] = session_key
+                    filtered["start_time"] = filtered["start_time"].astype(float) + offset_seconds
+                    filtered["stop_time"] = filtered["stop_time"].astype(float) + offset_seconds
+                else:
+                    logger.warning(
+                        f"{edf_path} not found in session_layouts -- leaving "
+                        f"start_time/stop_time file-local and session_key unset "
+                        f"for these rows (Gate 1/Gate 2/background derivation "
+                        f"will fall back to per-file behavior for them)."
+                    )
+
                 records.append(filtered)
                 logger.debug(f"Added {len(filtered)} rows from {csv_path}")
 
@@ -193,7 +411,7 @@ def make_master_file(dataset_path, output_path="master.csv", allow_tag=None):
 
     master = pd.concat(records, ignore_index=True)
 
-    cols = ["edf_path", "csv_path", "split", "channel", "start_time", "stop_time", "label", "confidence", "is_valid", "status"]
+    cols = ["edf_path", "csv_path", "split", "session_key", "channel", "start_time", "stop_time", "label", "confidence", "is_valid", "status"]
     cols = [c for c in cols if c in master.columns]
     master = master[cols]
 
@@ -348,9 +566,15 @@ def add_preictal_tags(master_df, sph, sop, postictal_time=None):
     )
     preictal_rows = []
     valid_counts = {False: 0, True: 0}
-    group_cols = ["edf_path", "channel"]
+    gate_fail_counts = {"gate1": 0, "gate2": 0}
+    # FIX: group by session_key (when present -- i.e. start_time/stop_time
+    # are session-global, see build_session_layouts()) instead of edf_path,
+    # so Gate 1/Gate 2 correctly see the TRUE continuous multi-file
+    # recording rather than treating each individual .edf file as its own
+    # isolated session.
+    group_cols = _group_cols_for(master_df)
 
-    for (edf_path, channel), group in master_df.groupby(group_cols):
+    for _group_key, group in master_df.groupby(group_cols):
         ictal = group.sort_values("start_time").reset_index(drop=True)
 
         for i in range(len(ictal)):
@@ -373,9 +597,10 @@ def add_preictal_tags(master_df, sph, sop, postictal_time=None):
                 preictal_end = j_start
                 is_valid = False
                 reason = "gate1 (session start)" if gate1_fail else "gate2 (inter-seizure gap)"
+                gate_fail_counts["gate1" if gate1_fail else "gate2"] += 1
                 logger.debug(
-                    f"Preictal window dropped (is_valid=False, {reason}) for {edf_path} "
-                    f"channel={channel} at ictal_start={j_start}"
+                    f"Preictal window dropped (is_valid=False, {reason}) for "
+                    f"group={_group_key} at ictal_start={j_start}"
                 )
             else:
                 preictal_start = j_start - sop - sph
@@ -406,7 +631,9 @@ def add_preictal_tags(master_df, sph, sop, postictal_time=None):
     if valid_counts[0]:
         logger.warning(
             f"{valid_counts[0]} preictal windows dropped entirely (is_valid=False, "
-            f"gate failure), {valid_counts[1]} valid full-length windows kept"
+            f"gate failure: {gate_fail_counts['gate1']} gate1/session-start, "
+            f"{gate_fail_counts['gate2']} gate2/inter-seizure-gap), "
+            f"{valid_counts[1]} valid full-length windows kept"
         )
 
     preictal_df = pd.DataFrame(preictal_rows)
@@ -464,9 +691,11 @@ def add_exclusion_intervals(master_df, postictal_time):
     logger.info(f"Adding exclusion intervals (postictal_time={postictal_time})")
 
     new_rows = []
-    group_cols = ["edf_path", "channel"]
+    # FIX: group by session_key when present (session-global time) instead
+    # of edf_path -- see build_session_layouts()'s docstring.
+    group_cols = _group_cols_for(master_df)
 
-    for (edf_path, channel), group in master_df.groupby(group_cols):
+    for _group_key, group in master_df.groupby(group_cols):
         # Only original ictal rows generate exclusion rows - not preictal
         # ('p'-prefixed) and not exclusion rows from a prior call.
         ictal = group[~group["label"].astype(str).str.startswith(("p", "x"), na=False)]
@@ -512,7 +741,14 @@ def add_postictal_and_consecutive(
     # seizures, unlike every other seizure type.
     original_rows = master_df[master_df["label"].astype(str).apply(_is_original_ictal_label)]
 
-    for (edf_path, channel), group in original_rows.groupby(["edf_path", "channel"], sort=False):
+    # FIX: group by session_key when present (session-global time) instead
+    # of edf_path -- otherwise two seizures genuinely close together in
+    # real time, but split across a file boundary, are invisible to each
+    # other here (each file's group starts fresh, so the second seizure
+    # never sees the first as "the previous seizure" for q*/c* purposes)
+    # -- see build_session_layouts()'s docstring.
+    group_cols = _group_cols_for(original_rows)
+    for _group_key, group in original_rows.groupby(group_cols, sort=False):
         group = group.sort_values(by=["start_time"]).reset_index(drop=True)
         idx = 0
 
@@ -614,8 +850,14 @@ def resolve_overlaps(df: pd.DataFrame) -> pd.DataFrame:
 
     active['priority'] = active['label'].apply(_get_label_priority)
 
+    # FIX: group by session_key when present (session-global time) instead
+    # of edf_path -- a genuine overlap spanning a file boundary (e.g. a
+    # postictal exclusion window that runs from the tail of file A into
+    # the head of file B) would otherwise never get resolved/carved,
+    # since each file's rows were only ever compared against other rows
+    # in that SAME file -- see build_session_layouts()'s docstring.
     kept_rows = []
-    for (edf_path, channel), group in active.groupby(['edf_path', 'channel']):
+    for _group_key, group in active.groupby(_group_cols_for(active)):
         group = group.sort_values(
             ['priority', 'start_time'], ascending=[False, True]
         )
@@ -686,6 +928,7 @@ def add_background_tags(
     label: str = "bg",
     unreliable_labels=DEFAULT_UNRELIABLE_LABELS,
     duration_cache: dict = None,
+    session_layouts: dict = None,
 ) -> pd.DataFrame:
     """
     Derive explicit background/negative-class windows from the stretches of
@@ -694,14 +937,16 @@ def add_background_tags(
     a clean negative-class signal (any label in `unreliable_labels` is
     treated as if that span were unlabeled).
 
-    For every (edf_path, channel) group of ORIGINAL rows (status == -1,
-    excluding any previously generated p*/q*/c*/x* rows):
-      1. Reads the recording's true duration from its .edf header (not just
-         the span covered by annotations), so background before the first
-         event / after the last event is captured too, not only gaps
-         between events.
+    For every (session_key, channel) group of ORIGINAL rows (status == -1,
+    excluding any previously generated p*/q*/c*/x* rows) -- falling back to
+    (edf_path, channel) if session_key/session_layouts aren't available:
+      1. Uses the TRUE TOTAL SESSION DURATION (summed across every
+         constituent .edf file in the session, via session_layouts -- not
+         just one file's own duration), so background before the first
+         event / after the last event across the WHOLE multi-file
+         recording is captured, not only gaps within a single file.
       2. Computes the complement of the "reliable" (non-unreliable-labeled)
-         intervals over [0, duration].
+         intervals over [0, total_session_duration].
       3. Chops every gap >= min_gap into consecutive `window_duration`
          second windows (stride `stride`, default = window_duration i.e.
          non-overlapping) -- so a single long gap becomes MANY background
@@ -727,6 +972,12 @@ def add_background_tags(
             from being generated over their span (default: ("bckg",)).
         duration_cache: Optional dict to memoize edf duration lookups
             across multiple calls.
+        session_layouts: Optional output of build_session_layouts(). When
+            given (and rows carry a session_key column), background gaps
+            are computed against the TRUE total session duration instead
+            of a single file's own duration -- see build_session_layouts()'s
+            docstring for why this matters. Falls back to legacy per-file
+            behavior when omitted.
 
     Returns:
         master_df with the generated background rows appended (status=1).
@@ -759,8 +1010,32 @@ def add_background_tags(
     generated = []
     skipped_no_duration = 0
 
-    for (edf_path, channel), group in original_rows.groupby(["edf_path", "channel"], sort=False):
-        duration = _get_edf_duration_seconds(edf_path, cache)
+    # FIX: group by session_key (session-global time) instead of edf_path
+    # when available, and use the TRUE TOTAL SESSION DURATION (summed
+    # across every constituent file, via session_layouts -- including
+    # files that have zero rows in master_df at all, e.g. a middle file
+    # with no seizure annotations) as the span to search for background
+    # gaps in, instead of a single file's own duration. The old per-file
+    # version measured "how much of THIS ONE FILE is uncovered" -- which
+    # both under-counts real background (misses gaps that are actually
+    # covered by an earlier/later file's annotations) and, more subtly,
+    # can flag a span as an uncovered "gap" purely because the ORIGINAL
+    # annotation for it happens to live in a different file's row set,
+    # even though the row is right there in master_df once you look across
+    # the whole session -- see build_session_layouts()'s docstring.
+    group_cols = _group_cols_for(original_rows)
+    for group_key, group in original_rows.groupby(group_cols, sort=False):
+        session_key = group_key[0] if "session_key" in group_cols else None
+        duration = None
+        if session_layouts is not None and session_key is not None:
+            session = session_layouts.get(session_key)
+            if session is not None:
+                duration = session["total_duration"]
+        if duration is None:
+            # Fallback: legacy per-file behavior (no session_layouts given,
+            # or session_key not found) -- use this group's own edf_path.
+            edf_path = group["edf_path"].iloc[0] if "edf_path" in group.columns else group_key[0]
+            duration = _get_edf_duration_seconds(edf_path, cache)
         if duration is None or duration <= 0:
             skipped_no_duration += 1
             continue
@@ -809,7 +1084,7 @@ def add_background_tags(
 
     logger.info(
         f"add_background_tags: generated {len(generated)} '{label}' rows "
-        f"({skipped_no_duration} (edf_path, channel) groups skipped - no readable duration)"
+        f"({skipped_no_duration} groups skipped - no readable duration)"
     )
 
     if not generated:

@@ -309,11 +309,28 @@ def build_master_file(
     bg_min_gap=None,
     bg_unreliable_labels=("bckg",),
 ):
+    # FIX: compute each session's true multi-file time layout ONCE, up
+    # front, and thread it through every stage below. Without this, every
+    # function in preictal_segment.py measured time (and grouped rows)
+    # relative to each individual .edf file's own zero point, even though
+    # a TUSZ "session" is frequently split across several back-to-back
+    # files concatenated into ONE continuous recording (see
+    # raw_eeg_extraction.py) -- so e.g. Gate 1 in add_preictal_tags would
+    # reject a seizure sitting a few minutes into the 4th file of a 6-file
+    # session as if it had zero seconds of lead-in time, when in reality
+    # ~3 files' worth of clean preceding data was right there in the same
+    # physical recording. See build_session_layouts()'s docstring in
+    # preictal_segment.py for the full explanation.
+    logger.info("Computing per-session file layout (.edf header durations)...")
+    session_layouts = preictal_segment.build_session_layouts(input_path)
+    logger.info(f"Indexed {len(session_layouts)} sessions for time-offset purposes")
+
     logger.info("Building master file...")
     master_df = preictal_segment.make_master_file(
         input_path,
         output_path=output_path,
         allow_tag=allow_tag,
+        session_layouts=session_layouts,
     )
     if master_df is None:
         raise RuntimeError("Master file generation failed.")
@@ -339,6 +356,7 @@ def build_master_file(
             stride=bg_stride,
             min_gap=bg_min_gap,
             unreliable_labels=bg_unreliable_labels,
+            session_layouts=session_layouts,
         )
 
     logger.info("Resolving label overlaps...")
@@ -350,6 +368,16 @@ def build_master_file(
         window_duration=bg_window_duration,
         preictal_stride=bg_stride,
     )
+
+    # FIX: this is the ONLY point where session-global time gets converted
+    # back to the file-local convention TUSZ-Conformer-Prediction's
+    # dataset.py expects (edf_path + start_time relative to THAT file's own
+    # zero point, offset-corrected at read time via each session's
+    # "{session_key}_offsets.json"). Every function above this line
+    # operated purely in session-global seconds -- see
+    # finalize_file_local_times()'s docstring.
+    logger.info("Converting session-global times back to file-local coordinates for output...")
+    master_df = preictal_segment.finalize_file_local_times(master_df, session_layouts)
 
     parent_dir = os.path.dirname(output_path)
     if parent_dir and not os.path.exists(parent_dir):
