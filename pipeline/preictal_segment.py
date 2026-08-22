@@ -567,6 +567,24 @@ def add_preictal_tags(master_df, sph, sop, postictal_time=None):
     preictal_rows = []
     valid_counts = {False: 0, True: 0}
     gate_fail_counts = {"gate1": 0, "gate2": 0}
+
+    # FIX: only generate preictal tags for rows that are actual bare
+    # seizure-type labels (e.g. "fnsz", "cpsz") -- previously this iterated
+    # over EVERY row in master_df regardless of label, so once "bckg" (or
+    # any other non-seizure tag) was included via --tags, this would
+    # happily generate a "pbckg" preictal row for background windows too.
+    # That garbage label then fails classify_label()'s fail-loud check
+    # downstream in TUSZ-Conformer-Prediction's dataset.py with exactly
+    # "Unrecognized dataset label 'pbckg'" -- a background window was never
+    # a seizure, so it should never get a preictal/gate treatment at all.
+    ictal_source = master_df[master_df["label"].astype(str).apply(_is_original_ictal_label)]
+    if ictal_source.empty:
+        logger.warning(
+            "add_preictal_tags: no bare seizure-type rows found in master_df "
+            "-- no preictal tags generated. (Check that allow_tag/--tags "
+            "included at least one seizure type, not just background.)"
+        )
+
     # FIX: group by session_key (when present -- i.e. start_time/stop_time
     # are session-global, see build_session_layouts()) instead of edf_path,
     # so Gate 1/Gate 2 correctly see the TRUE continuous multi-file
@@ -574,7 +592,7 @@ def add_preictal_tags(master_df, sph, sop, postictal_time=None):
     # isolated session.
     group_cols = _group_cols_for(master_df)
 
-    for _group_key, group in master_df.groupby(group_cols):
+    for _group_key, group in ictal_source.groupby(group_cols):
         ictal = group.sort_values("start_time").reset_index(drop=True)
 
         for i in range(len(ictal)):
@@ -697,8 +715,11 @@ def add_exclusion_intervals(master_df, postictal_time):
 
     for _group_key, group in master_df.groupby(group_cols):
         # Only original ictal rows generate exclusion rows - not preictal
-        # ('p'-prefixed) and not exclusion rows from a prior call.
-        ictal = group[~group["label"].astype(str).str.startswith(("p", "x"), na=False)]
+        # ('p'-prefixed), not exclusion rows from a prior call, and not
+        # non-seizure tags like "bckg" (which would otherwise produce a
+        # nonsense "xbckg" label -- see the matching fix in
+        # add_preictal_tags for the same class of bug).
+        ictal = group[group["label"].astype(str).apply(_is_original_ictal_label)]
 
         for _, row in ictal.iterrows():
             i_end = float(row["stop_time"])
