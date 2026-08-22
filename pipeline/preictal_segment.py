@@ -14,6 +14,45 @@ SPLITS = ("train", "dev", "eval")
 # negative-class signal), so it must not be trusted as coverage.
 DEFAULT_UNRELIABLE_LABELS = ("bckg",)
 
+# Bare TUSZ seizure-type labels (the "original ictal" rows before any
+# p*/q*/c*/x* marker gets prefixed onto them). Kept in sync with
+# TUSZ-Conformer-Prediction/dataset/label_utils.py's KNOWN_SEIZURE_TYPES --
+# if you add a type there, add it here too, and vice versa.
+#
+# FIX: two of these ("cpsz" complex-partial, "cnsz" clonic) start with the
+# same letter "c" that this pipeline also uses as a PREFIX to mark
+# consecutive-seizure rows (e.g. "cgnszfnsz"). Several functions below used
+# to identify "original" ictal rows with a raw
+# `label.startswith(("p","q","c","x"))` check, which can't distinguish
+# "cpsz"/"cnsz" (a bare seizure type that happens to start with 'c') from a
+# genuine "c"-prefixed consecutive marker. That silently treated real
+# cpsz/cnsz seizure rows as if they were derived/marker rows: their spans
+# were excluded from "reliable" coverage when deriving background windows
+# (so synthetic "bg" rows could get stamped directly on top of real
+# cpsz/cnsz seizure activity), they never received a postictal q* tag or
+# consecutive-seizure handling, and they were mis-prioritized during overlap
+# resolution. Use KNOWN_SEIZURE_TYPES membership (an exact allow-list check)
+# instead of prefix parsing wherever "is this an original/bare ictal row?"
+# is being decided -- that's unambiguous regardless of which letter a type
+# name happens to start with.
+KNOWN_SEIZURE_TYPES = {
+    "fnsz", "gnsz", "cpsz", "spsz", "tnsz", "tcsz",
+    "absz", "mysz", "cnsz", "atsz", "seiz", "sz", "nesz",
+}
+
+
+def _is_original_ictal_label(label) -> bool:
+    """True if *label* is a bare seizure-type tag (no p/q/c/x marker
+    prefix yet) -- i.e. it is a row as it originally appeared in the raw
+    TUSZ annotation CSVs, before this pipeline added any derived rows.
+
+    Uses exact membership in KNOWN_SEIZURE_TYPES rather than prefix
+    stripping, so real types that happen to start with the same letter as
+    a marker prefix (namely "cpsz"/"cnsz" vs the "c" consecutive-marker
+    prefix) are never misclassified.
+    """
+    return str(label) in KNOWN_SEIZURE_TYPES
+
 
 def get_split(path):
     """
@@ -465,7 +504,13 @@ def add_postictal_and_consecutive(
         return master_df.copy()
 
     generated = []
-    original_rows = master_df[~master_df["label"].astype(str).str.startswith(("p", "q", "c", "x"))]
+    # FIX: was `~label.startswith(("p","q","c","x"))`, which wrongly
+    # excluded bare "cpsz"/"cnsz" ictal rows (they start with "c") from
+    # "original_rows" -- see _is_original_ictal_label() docstring above.
+    # That meant cpsz/cnsz seizures never got a postictal q* tag and never
+    # participated in consecutive-seizure (c*) merging with neighboring
+    # seizures, unlike every other seizure type.
+    original_rows = master_df[master_df["label"].astype(str).apply(_is_original_ictal_label)]
 
     for (edf_path, channel), group in original_rows.groupby(["edf_path", "channel"], sort=False):
         group = group.sort_values(by=["start_time"]).reset_index(drop=True)
@@ -543,6 +588,14 @@ def resolve_overlaps(df: pd.DataFrame) -> pd.DataFrame:
 
     def _get_label_priority(label):
         lbl = str(label)
+        # FIX: check bare seizure-type labels (e.g. "cpsz", "cnsz") FIRST,
+        # via exact allow-list membership, before falling back to prefix
+        # checks. Previously `lbl.startswith('c')` caught "cpsz"/"cnsz" and
+        # mis-prioritized them as if they were "c"-prefixed consecutive
+        # marker rows instead of original ictal rows -- see
+        # _is_original_ictal_label() docstring above for the full story.
+        if _is_original_ictal_label(lbl):
+            return 1
         if lbl.startswith('x'):
             return 6
         if lbl.startswith('c'):
@@ -691,8 +744,16 @@ def add_background_tags(
 
     cache = duration_cache if duration_cache is not None else {}
 
+    # FIX: was `~label.startswith(("p","q","c","x","bg"))`, which wrongly
+    # excluded bare "cpsz"/"cnsz" ictal rows (they start with "c") from
+    # "original_rows" -- see _is_original_ictal_label() docstring above.
+    # Since this dataframe is used below to compute "reliable" coverage and
+    # find the complement (uncovered gaps) to fill with synthetic "bg"
+    # rows, excluding real cpsz/cnsz seizure spans made them look like
+    # uncovered gaps -- i.e. this could stamp synthetic background labels
+    # directly on top of real, un-derived cpsz/cnsz seizure activity.
     original_rows = master_df[
-        ~master_df["label"].astype(str).str.startswith(("p", "q", "c", "x", "bg"))
+        master_df["label"].astype(str).apply(_is_original_ictal_label)
     ]
 
     generated = []
@@ -843,4 +904,4 @@ def chop_master_windows(
         ).reset_index(drop=True)
 
     logger.info(f"chop_master_windows: converted {len(master_df)} input rows into {len(result)} fixed-window rows (window_duration={window_duration}s)")
-    return result
+    return result
