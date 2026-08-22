@@ -6,35 +6,8 @@ logger = handle_logs.get_logger("make_master_file", "applog")
 
 SPLITS = ("train", "dev", "eval")
 
-# Labels that do NOT count as reliable annotation coverage when deriving
-# background windows -- i.e. a span carrying only one of these labels is
-# treated the same as a span with no label at all. "bckg" is TUSZ's own
-# background tag, but per project findings it does not reliably indicate
-# artifact-free background (it's an artifact-flagged label, not a clean
-# negative-class signal), so it must not be trusted as coverage.
 DEFAULT_UNRELIABLE_LABELS = ("bckg",)
 
-# Bare TUSZ seizure-type labels (the "original ictal" rows before any
-# p*/q*/c*/x* marker gets prefixed onto them). Kept in sync with
-# TUSZ-Conformer-Prediction/dataset/label_utils.py's KNOWN_SEIZURE_TYPES --
-# if you add a type there, add it here too, and vice versa.
-#
-# FIX: two of these ("cpsz" complex-partial, "cnsz" clonic) start with the
-# same letter "c" that this pipeline also uses as a PREFIX to mark
-# consecutive-seizure rows (e.g. "cgnszfnsz"). Several functions below used
-# to identify "original" ictal rows with a raw
-# `label.startswith(("p","q","c","x"))` check, which can't distinguish
-# "cpsz"/"cnsz" (a bare seizure type that happens to start with 'c') from a
-# genuine "c"-prefixed consecutive marker. That silently treated real
-# cpsz/cnsz seizure rows as if they were derived/marker rows: their spans
-# were excluded from "reliable" coverage when deriving background windows
-# (so synthetic "bg" rows could get stamped directly on top of real
-# cpsz/cnsz seizure activity), they never received a postictal q* tag or
-# consecutive-seizure handling, and they were mis-prioritized during overlap
-# resolution. Use KNOWN_SEIZURE_TYPES membership (an exact allow-list check)
-# instead of prefix parsing wherever "is this an original/bare ictal row?"
-# is being decided -- that's unambiguous regardless of which letter a type
-# name happens to start with.
 KNOWN_SEIZURE_TYPES = {
     "fnsz", "gnsz", "cpsz", "spsz", "tnsz", "tcsz",
     "absz", "mysz", "cnsz", "atsz", "seiz", "sz", "nesz",
